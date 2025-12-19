@@ -11,6 +11,7 @@ export default function CanvasProvider({
   const [currentImageUrl, setCurrentImageUrl] = useState<string>("");
   const maxHistorySize = 20;
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const imageCanvasRef = useRef<HTMLCanvasElement>(null);
   // History Management
 
   const storeState = useCallback(() => {
@@ -76,6 +77,7 @@ export default function CanvasProvider({
         redo,
         storeState,
         maskCanvasRef,
+        imageCanvasRef,
         currentImageUrl,
         setCurrentImageUrl,
       }}
