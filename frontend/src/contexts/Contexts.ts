@@ -8,6 +8,10 @@ interface CanvasContextType {
   imageCanvasRef: React.RefObject<HTMLCanvasElement | null> | null;
   currentImageUrl: string;
   setCurrentImageUrl: (url: string) => void;
+  canvasVersion: number;
+  setCanvasVersion: (version: number) => void;
+  zoomLevel: number;
+  setZoomLevel: (level: number) => void;
 }
 
 const defaultContext: CanvasContextType = {
@@ -18,6 +22,10 @@ const defaultContext: CanvasContextType = {
   imageCanvasRef: null,
   currentImageUrl: "./datasets/test1/images/1.JPG",
   setCurrentImageUrl: () => {},
+  canvasVersion: 0,
+  setCanvasVersion: () => {},
+  zoomLevel: 1,
+  setZoomLevel: () => {},
 };
 
 export const CanvasContext = createContext<CanvasContextType>(defaultContext);

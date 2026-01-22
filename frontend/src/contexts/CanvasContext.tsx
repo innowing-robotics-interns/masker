@@ -9,6 +9,8 @@ export default function CanvasProvider({
   const [past, setPast] = useState<Array<ImageData>>([]);
   const [future, setFuture] = useState<Array<ImageData>>([]);
   const [currentImageUrl, setCurrentImageUrl] = useState<string>("");
+  const [canvasVersion, setCanvasVersion] = useState(0);
+  const [zoomLevel, setZoomLevel] = useState(1);
   const maxHistorySize = 20;
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -80,6 +82,10 @@ export default function CanvasProvider({
         imageCanvasRef,
         currentImageUrl,
         setCurrentImageUrl,
+        canvasVersion,
+        setCanvasVersion,
+        zoomLevel,
+        setZoomLevel,
       }}
     >
       {children}

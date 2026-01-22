@@ -1,16 +1,37 @@
 import { useRef, useEffect, useState, useCallback, useContext } from "react";
 import { fetchImageFromBackend } from "../utils/fetchImages";
 import { CanvasContext } from "../contexts/Contexts";
+import { Tool } from "../types";
+import Toolbar from "./Toolbar";
 
-export default function Canvas() {
+export default function Canvas({
+  toggleFiles,
+  activeTool,
+  setActiveTool,
+}: {
+  toggleFiles: () => void;
+  activeTool: Tool;
+  setActiveTool: (tool: Tool) => void;
+}) {
   const [brushMode, setBrushMode] = useState<"draw" | "magic" | "erase">(
     "draw",
   );
   const [brushSize, setBrushSize] = useState(5);
   const [isDrawing, setIsDrawing] = useState(false);
   const lastPosRef = useRef<[number, number] | null>(null);
-  const { maskCanvasRef, imageCanvasRef, storeState, currentImageUrl } =
-    useContext(CanvasContext);
+  const {
+    maskCanvasRef,
+    imageCanvasRef,
+    storeState,
+    currentImageUrl,
+    canvasVersion,
+    setCanvasVersion,
+    zoomLevel,
+    setZoomLevel,
+  } = useContext(CanvasContext);
+  const minZoom = 0.2;
+  const maxZoom = 5.0;
+  const zoomStep = 0.1;
 
   // Magic pen overlay canvas
   const magicPenCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -46,12 +67,12 @@ export default function Canvas() {
       if (!canvas) return [0, 0];
 
       const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const x = (e.clientX - rect.left) / zoomLevel;
+      const y = (e.clientY - rect.top) / zoomLevel;
 
       return [x, y];
     },
-    [maskCanvasRef],
+    [maskCanvasRef, zoomLevel],
   );
 
   const dist = useCallback(
@@ -106,7 +127,7 @@ export default function Canvas() {
       x: number,
       y: number,
       ctx: CanvasRenderingContext2D,
-      tolerance: number = 254,
+      tolerance: number = 50,
     ) => {
       const imageData = ctx.getImageData(
         0,
@@ -427,7 +448,24 @@ export default function Canvas() {
       }
     }
     maskCtx.putImageData(imageData, 0, 0);
-  }, [maskCanvasRef]);
+    storeState();
+  }, [maskCanvasRef, storeState, canvasVersion, setCanvasVersion]);
+
+  useEffect(() => {
+    const imageCanvas = imageCanvasRef.current;
+    const maskCanvas = maskCanvasRef.current;
+    const magicCanvas = magicPenCanvasRef.current;
+    if (imageCanvas && maskCanvas && magicCanvas) {
+      const displayWidth = imageCanvas.width * zoomLevel;
+      const displayHeight = imageCanvas.height * zoomLevel;
+      imageCanvas.style.width = `${displayWidth}px`;
+      imageCanvas.style.height = `${displayHeight}px`;
+      maskCanvas.style.width = `${displayWidth}px`;
+      maskCanvas.style.height = `${displayHeight}px`;
+      magicCanvas.style.width = `${displayWidth}px`;
+      magicCanvas.style.height = `${displayHeight}px`;
+    }
+  }, [zoomLevel, imageCanvasRef, maskCanvasRef, magicPenCanvasRef]);
 
   const handleMouseUp = useCallback(() => {
     if (!isDrawing) return;
@@ -470,7 +508,8 @@ export default function Canvas() {
   }, [isDrawing, brushMode, removeGray, processCropsLocally, storeState]);
 
   const switchMode = useCallback(() => {
-    setBrushMode((prev) => (prev === "draw" ? "magic" : "draw"));
+    setBrushMode((prev) => (prev === "magic" ? "draw" : "magic"));
+    setActiveTool((prev) => (prev === "magic" ? "brush" : "magic"));
   }, []);
 
   const handleBrushSizeChange = useCallback(
@@ -487,7 +526,7 @@ export default function Canvas() {
       const maskCanvas = maskCanvasRef.current;
       const maskCtx = maskCanvas?.getContext("2d");
       if (!maskCtx) return;
-      floodFill(x, y, maskCtx);
+      floodFill(x, y, maskCtx, 30);
       removeGray();
     },
     [floodFill, getMouseXY, maskCanvasRef, removeGray],
@@ -662,7 +701,16 @@ export default function Canvas() {
 
   return (
     <main className="h-full w-full relative bg-neutral-100 touch-none">
-      <div className="flex items-center gap-4 p-2">
+      <Toolbar
+        toggleFiles={toggleFiles}
+        switchMode={switchMode}
+        zoomIn={() => setZoomLevel(Math.min(zoomLevel + zoomStep, maxZoom))}
+        zoomOut={() => setZoomLevel(Math.max(zoomLevel - zoomStep, minZoom))}
+        zoomLevel={zoomLevel}
+        activeTool={activeTool}
+        setActiveTool={setActiveTool}
+      />
+      {/*<div className="flex items-center gap-4 p-2">
         <button
           onClick={() => setBrushMode((p) => (p === "draw" ? "erase" : "draw"))}
           className={`px-4 py-2 text-white border-none rounded cursor-pointer ${
@@ -674,15 +722,6 @@ export default function Canvas() {
             : brushMode === "erase"
               ? "Erase"
               : "Draw"}
-        </button>
-
-        <button
-          onClick={switchMode}
-          className={`px-4 py-2 text-white border-none rounded cursor-pointer ${
-            brushMode === "magic" ? "bg-purple-600" : "bg-neutral-700"
-          }`}
-        >
-          {brushMode === "magic" ? "Magic Brush (On)" : "Magic Brush (Off)"}
         </button>
 
         <div className="flex items-center gap-2.5">
@@ -697,18 +736,19 @@ export default function Canvas() {
           />
           <span className="min-w-[30px] text-center">{brushSize}</span>
         </div>
-      </div>
+      </div>*/}
 
       <div className="relative w-fit h-fit border border-gray-300 shadow-md">
         <canvas ref={imageCanvasRef} className="block" />
         <canvas
+          key={canvasVersion}
           ref={maskCanvasRef}
           className="absolute top-0 left-0 block cursor-crosshair opacity-80"
         />
         {/* magic overlay: draws magenta strokes and renders each crop as a square image */}
         <canvas
           ref={magicPenCanvasRef}
-          className="absolute top-0 left-0 block pointer-events-none"
+          className="absolute top-0 left-0 block cursor-crosshair opacity-50 pointer-events-none"
         />
       </div>
     </main>
