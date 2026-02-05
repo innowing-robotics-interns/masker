@@ -1,23 +1,45 @@
 import { useRef, useEffect, useState, useCallback, useContext } from "react";
 import { fetchImageFromBackend } from "../utils/fetchImages";
 import { CanvasContext } from "../contexts/Contexts";
-import { Tool } from "../types";
+import type { Tool, Crop } from "../types";
 import Toolbar from "./Toolbar";
+import { predictCrops } from "../api/magicPen";
+import ColorPickerPopover from "./ColorPickerPopover";
+import {
+  saveMaskForImage,
+  uploadMask,
+  getDatasetNameFromImageUrl,
+  fetchMaskForImage,
+} from "../utils/masks";
 
 export default function Canvas({
   toggleFiles,
   activeTool,
   setActiveTool,
+  scrollContainerRef,
 }: {
   toggleFiles: () => void;
   activeTool: Tool;
   setActiveTool: (tool: Tool) => void;
+  scrollContainerRef: React.RefObject<HTMLDivElement>;
 }) {
   const [brushMode, setBrushMode] = useState<"draw" | "magic" | "erase">(
     "draw",
   );
-  const [brushSize, setBrushSize] = useState(5);
+  const [brushSize] = useState(5);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [maskPreviewRgb, setMaskPreviewRgb] = useState({
+    r: 255,
+    g: 255,
+    b: 255,
+  });
+  const [showMaskSavedToast, setShowMaskSavedToast] = useState(false);
+  const saveToastTimeoutRef = useRef<number | null>(null);
+  const [colorPickerAnchor, setColorPickerAnchor] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const maskPreviewColorCss = `rgb(${maskPreviewRgb.r}, ${maskPreviewRgb.g}, ${maskPreviewRgb.b})`;
   const lastPosRef = useRef<[number, number] | null>(null);
   const {
     maskCanvasRef,
@@ -25,13 +47,38 @@ export default function Canvas({
     storeState,
     currentImageUrl,
     canvasVersion,
-    setCanvasVersion,
     zoomLevel,
     setZoomLevel,
   } = useContext(CanvasContext);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const maskFileInputRef = useRef<HTMLInputElement | null>(null);
+  const previewRafRef = useRef<number | null>(null);
+  const previewQueuedRef = useRef(false);
   const minZoom = 0.2;
   const maxZoom = 5.0;
   const zoomStep = 0.1;
+
+  const zoomTo = useCallback(
+    (nextZoom: number) => {
+      const container = scrollContainerRef?.current;
+      if (!container) {
+        setZoomLevel(nextZoom);
+        return;
+      }
+
+      const { scrollLeft, scrollTop, clientWidth, clientHeight } = container;
+      const centerX = (scrollLeft + clientWidth / 2) / zoomLevel;
+      const centerY = (scrollTop + clientHeight / 2) / zoomLevel;
+
+      setZoomLevel(nextZoom);
+
+      requestAnimationFrame(() => {
+        container.scrollLeft = centerX * nextZoom - clientWidth / 2;
+        container.scrollTop = centerY * nextZoom - clientHeight / 2;
+      });
+    },
+    [scrollContainerRef, setZoomLevel, zoomLevel],
+  );
 
   // Magic pen overlay canvas
   const magicPenCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -41,25 +88,22 @@ export default function Canvas({
   const magicPenColor = "rgba(255, 0, 255, 0.9)";
 
   // Collected crops
-  const cropsRef = useRef<
-    Array<{
-      id: number;
-      image_base64: string;
-      centerX: number;
-      centerY: number;
-      width: number;
-      height: number;
-      canvas_width: number;
-      canvas_height: number;
-      timestamp: number;
-      line_distance: number;
-    }>
-  >([]);
+  const cropsRef = useRef<Crop[]>([]);
 
   // History / sampling controls
   const foregroundColor = "rgb(255, 255, 255)"; // White
   const backgroundColor = "rgb(0, 0, 0)"; // Black, used for erase mode logic
   const brushSpacing = 1;
+
+  useEffect(() => {
+    if (activeTool === "erase") {
+      setBrushMode("erase");
+    } else if (activeTool === "magic") {
+      setBrushMode("magic");
+    } else if (activeTool === "brush") {
+      setBrushMode("draw");
+    }
+  }, [activeTool]);
 
   const getMouseXY = useCallback(
     (e: MouseEvent): [number, number] => {
@@ -118,7 +162,7 @@ export default function Canvas({
       );
       ctx.fill();
     },
-    [magicPenColor, backgroundColor, foregroundColor],
+    [magicPenColor, backgroundColor, foregroundColor, brushSize],
   );
 
   // Flood fill (used on right click)
@@ -255,7 +299,190 @@ export default function Canvas({
     [brushSize, brushSpacing, dist, drawCircle],
   );
 
+  const renderMaskPreview = useCallback(() => {
+    const maskCanvas = maskCanvasRef.current;
+    const previewCanvas = previewCanvasRef.current;
+    if (!maskCanvas || !previewCanvas) return;
+
+    const width = maskCanvas.width;
+    const height = maskCanvas.height;
+
+    if (previewCanvas.width !== width) previewCanvas.width = width;
+    if (previewCanvas.height !== height) previewCanvas.height = height;
+
+    const ctx = previewCanvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(maskCanvas, 0, 0);
+
+    ctx.globalCompositeOperation = "source-in";
+    ctx.fillStyle = maskPreviewColorCss;
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.globalCompositeOperation = "source-over";
+  }, [maskCanvasRef, maskPreviewColorCss, previewCanvasRef]);
+
+  const scheduleMaskPreviewUpdate = useCallback(() => {
+    if (previewQueuedRef.current) return;
+    previewQueuedRef.current = true;
+    previewRafRef.current = window.requestAnimationFrame(() => {
+      previewQueuedRef.current = false;
+      renderMaskPreview();
+    });
+  }, [renderMaskPreview]);
+
+  useEffect(() => {
+    scheduleMaskPreviewUpdate();
+  }, [maskPreviewColorCss, scheduleMaskPreviewUpdate]);
+
+  const removeGray = useCallback(() => {
+    const maskCanvas = maskCanvasRef.current;
+    const maskCtx = maskCanvas?.getContext("2d");
+    if (!maskCanvas || !maskCtx) return;
+
+    const imageData = maskCtx.getImageData(
+      0,
+      0,
+      maskCanvas.width,
+      maskCanvas.height,
+    );
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const a = data[i + 3];
+
+      // choose a threshold; often alpha is the right one
+      const on = a > 127;
+
+      data[i] = data[i + 1] = data[i + 2] = data[i + 3] = on ? 255 : 0;
+    }
+    maskCtx.putImageData(imageData, 0, 0);
+    storeState();
+    scheduleMaskPreviewUpdate();
+  }, [maskCanvasRef, storeState, scheduleMaskPreviewUpdate]);
+
   const lineLenRef = useRef<number>(0);
+
+  // Double check this one
+  const applyPredictionToMask = useCallback(
+    (result: any) => {
+      if (result.predictions) {
+        result.predictions.forEach((prediction: any) => {
+          const maskCanvas = maskCanvasRef.current;
+          if (!maskCanvas) return;
+          const maskCtx = maskCanvas.getContext("2d");
+          if (!maskCtx) return;
+
+          const img = new Image();
+          img.onload = () => {
+            const tempCanvas = document.createElement("canvas");
+            tempCanvas.width = img.width;
+            tempCanvas.height = img.height;
+            const tempCtx = tempCanvas.getContext("2d");
+            if (!tempCtx) return;
+
+            tempCtx.drawImage(img, 0, 0);
+            const predictionData = tempCtx.getImageData(
+              0,
+              0,
+              img.width,
+              img.height,
+            );
+            const predictionPixels = predictionData.data;
+
+            const newMaskData = maskCtx.createImageData(img.width, img.height);
+            const newMaskPixels = newMaskData.data;
+
+            for (let i = 0; i < predictionPixels.length; i += 4) {
+              const r = predictionPixels[i];
+              const g = predictionPixels[i + 1];
+              const b = predictionPixels[i + 2];
+
+              if (r > 200 && g > 200 && b > 200) {
+                newMaskPixels[i] = 255;
+                newMaskPixels[i + 1] = 255;
+                newMaskPixels[i + 2] = 255;
+                newMaskPixels[i + 3] = 255;
+              }
+            }
+
+            const finalTempCanvas = document.createElement("canvas");
+            finalTempCanvas.width = img.width;
+            finalTempCanvas.height = img.height;
+            const finalTempCtx = finalTempCanvas.getContext("2d");
+            if (!finalTempCtx) return;
+            finalTempCtx.putImageData(newMaskData, 0, 0);
+
+            maskCtx.globalCompositeOperation = "source-over";
+            maskCtx.drawImage(
+              finalTempCanvas,
+              prediction.centerX - prediction.width / 2,
+              prediction.centerY - prediction.height / 2,
+            );
+
+            removeGray();
+            storeState();
+          };
+          img.src = prediction.mask_base64;
+        });
+      } else if (result.merged_mask_base64) {
+        const maskCanvas = maskCanvasRef.current;
+        if (!maskCanvas) return;
+        const maskCtx = maskCanvas.getContext("2d", {
+          willReadFrequently: true,
+        });
+        if (!maskCtx) return;
+
+        const img = new Image();
+        img.onload = () => {
+          const tempCanvas = document.createElement("canvas");
+          tempCanvas.width = maskCanvas.width;
+          tempCanvas.height = maskCanvas.height;
+          const tempCtx = tempCanvas.getContext("2d");
+          if (!tempCtx) return;
+
+          tempCtx.drawImage(img, 0, 0, maskCanvas.width, maskCanvas.height);
+
+          const newMaskData = tempCtx.getImageData(
+            0,
+            0,
+            tempCanvas.width,
+            tempCanvas.height,
+          );
+          const newMaskPixels = newMaskData.data;
+
+          const currentMaskData = maskCtx.getImageData(
+            0,
+            0,
+            maskCanvas.width,
+            maskCanvas.height,
+          );
+          const currentMaskPixels = currentMaskData.data;
+
+          for (let i = 0; i < newMaskPixels.length; i += 4) {
+            if (
+              newMaskPixels[i] === 255 &&
+              newMaskPixels[i + 1] === 255 &&
+              newMaskPixels[i + 2] === 255
+            ) {
+              currentMaskPixels[i] = 255;
+              currentMaskPixels[i + 1] = 255;
+              currentMaskPixels[i + 2] = 255;
+              currentMaskPixels[i + 3] = 255;
+            }
+          }
+
+          maskCtx.putImageData(currentMaskData, 0, 0);
+
+          removeGray();
+          storeState();
+        };
+        img.src = result.merged_mask_base64;
+      }
+    },
+    [maskCanvasRef, removeGray, storeState],
+  );
 
   // Create and register a crop at a given position (center coordinates)
   function createCropAtPosition(centerX: number, centerY: number) {
@@ -285,55 +512,30 @@ export default function Canvas({
     }
   }
 
-  // Process crops locally (demo): render each crop image onto the magic overlay as a square.
-  async function processCropsLocally(
-    crops: Array<{
-      id: number;
-      image_base64: string;
-      centerX: number;
-      centerY: number;
-      width: number;
-      height: number;
-    }>,
-    magicCtx: CanvasRenderingContext2D,
-  ) {
-    if (crops.length === 0) return null;
+  const processCrops = useCallback(async () => {
+    const crops = cropsRef.current;
+    if (crops.length === 0) return;
 
-    const drawPromises = crops.map(
-      (crop) =>
-        new Promise<void>((resolve) => {
-          const img = new Image();
-          img.onload = () => {
-            const x = Math.floor(crop.centerX - crop.width / 2);
-            const y = Math.floor(crop.centerY - crop.height / 2);
-
-            magicCtx.save();
-            magicCtx.globalCompositeOperation = "source-over";
-            magicCtx.imageSmoothingEnabled = false;
-            magicCtx.drawImage(img, x, y, crop.width, crop.height);
-
-            magicCtx.strokeStyle = "rgba(255, 0, 255, 0.9)";
-            magicCtx.lineWidth = 2;
-            magicCtx.strokeRect(
-              x + 0.5,
-              y + 0.5,
-              crop.width - 1,
-              crop.height - 1,
-            );
-
-            magicCtx.restore();
-            resolve();
-          };
-          img.onerror = () => {
-            resolve();
-          };
-          img.src = crop.image_base64;
-        }),
-    );
-
-    await Promise.all(drawPromises);
-    return { status: "success", num_crops_rendered: crops.length };
-  }
+    try {
+      const result = await predictCrops(crops, {
+        /* prediction options */
+      });
+      if (result && result.status === "success") {
+        applyPredictionToMask(result);
+      }
+    } catch (error) {
+      console.error("Error processing crops:", error);
+    } finally {
+      // Clear crops and magic pen canvas after processing
+      cropsRef.current = [];
+      const magicCanvas = magicPenCanvasRef.current;
+      const magicCtx = magicCanvas?.getContext("2d");
+      if (magicCanvas && magicCtx) {
+        magicCtx.clearRect(0, 0, magicCanvas.width, magicCanvas.height);
+      }
+      lineLenRef.current = 0;
+    }
+  }, [applyPredictionToMask]);
 
   const handleMouseDown = useCallback(
     (e: MouseEvent) => {
@@ -353,9 +555,11 @@ export default function Canvas({
       if (brushMode === "draw") {
         if (!maskCtx) return;
         drawPoint(x, y, maskCtx, "draw");
+        scheduleMaskPreviewUpdate();
       } else if (brushMode === "erase") {
         if (!maskCtx) return;
         drawPoint(x, y, maskCtx, "erase");
+        scheduleMaskPreviewUpdate();
       } else if (brushMode === "magic") {
         // initialize magic overlay drawing state
         if (!magicCanvas) return;
@@ -371,8 +575,17 @@ export default function Canvas({
       }
 
       lastPosRef.current = [x, y];
+
+      // Update the preview canvas
     },
-    [drawPoint, getMouseXY, maskCanvasRef, storeState, brushMode],
+    [
+      drawPoint,
+      getMouseXY,
+      maskCanvasRef,
+      storeState,
+      brushMode,
+      scheduleMaskPreviewUpdate,
+    ],
   );
 
   const handleMouseMove = useCallback(
@@ -390,8 +603,10 @@ export default function Canvas({
 
       if (brushMode === "draw" && maskCtx) {
         drawPoint(x, y, maskCtx, "draw");
+        scheduleMaskPreviewUpdate();
       } else if (brushMode === "erase" && maskCtx) {
         drawPoint(x, y, maskCtx, "erase");
+        scheduleMaskPreviewUpdate();
       } else if (brushMode === "magic" && magicCtx) {
         drawPoint(x, y, magicCtx, "magic", lineLenRef);
 
@@ -423,39 +638,16 @@ export default function Canvas({
       maskCanvasRef,
       brushMode,
       createCropAtPosition,
+      scheduleMaskPreviewUpdate,
     ],
   );
-
-  const removeGray = useCallback(() => {
-    const maskCanvas = maskCanvasRef.current;
-    const maskCtx = maskCanvas?.getContext("2d");
-    if (!maskCanvas || !maskCtx) return;
-
-    const imageData = maskCtx.getImageData(
-      0,
-      0,
-      maskCanvas.width,
-      maskCanvas.height,
-    );
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      // if closer to white, set to white; else black
-      const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-      if (avg > 127) {
-        data[i] = data[i + 1] = data[i + 2] = 255;
-      } else {
-        data[i] = data[i + 1] = data[i + 2] = 0;
-      }
-    }
-    maskCtx.putImageData(imageData, 0, 0);
-    storeState();
-  }, [maskCanvasRef, storeState, canvasVersion, setCanvasVersion]);
 
   useEffect(() => {
     const imageCanvas = imageCanvasRef.current;
     const maskCanvas = maskCanvasRef.current;
     const magicCanvas = magicPenCanvasRef.current;
-    if (imageCanvas && maskCanvas && magicCanvas) {
+    const previewCanvas = previewCanvasRef.current;
+    if (imageCanvas && maskCanvas && magicCanvas && previewCanvas) {
       const displayWidth = imageCanvas.width * zoomLevel;
       const displayHeight = imageCanvas.height * zoomLevel;
       imageCanvas.style.width = `${displayWidth}px`;
@@ -464,8 +656,16 @@ export default function Canvas({
       maskCanvas.style.height = `${displayHeight}px`;
       magicCanvas.style.width = `${displayWidth}px`;
       magicCanvas.style.height = `${displayHeight}px`;
+      previewCanvas.style.width = `${displayWidth}px`;
+      previewCanvas.style.height = `${displayHeight}px`;
     }
-  }, [zoomLevel, imageCanvasRef, maskCanvasRef, magicPenCanvasRef]);
+  }, [
+    zoomLevel,
+    imageCanvasRef,
+    maskCanvasRef,
+    magicPenCanvasRef,
+    previewCanvasRef,
+  ]);
 
   const handleMouseUp = useCallback(() => {
     if (!isDrawing) return;
@@ -475,49 +675,22 @@ export default function Canvas({
     if (brushMode === "draw") {
       removeGray();
     } else if (brushMode === "magic") {
-      // For demo only: process collected crops locally and render them on the magic overlay
-      const magicCanvas = magicPenCanvasRef.current;
-      const maskCanvas = maskCanvasRef.current;
-
-      if (!magicCanvas) return;
-      const magicCtx = magicCanvas.getContext("2d");
-      const maskCtx = maskCanvas?.getContext("2d");
-
-      if (!magicCtx) return;
-
-      // Clear any transient magic strokes before rendering final crop overlays
-      magicCtx.clearRect(0, 0, magicCanvas.width, magicCanvas.height);
-
-      if (cropsRef.current.length === 0) {
-        // Nothing to render
-        return;
-      }
-
-      // Render each crop onto the magic overlay (visual demo)
-      processCropsLocally(cropsRef.current, magicCtx)
-        .then(() => {
-          // Clear collected crops after applying them
-          cropsRef.current = [];
-          // Reset line length tracker
-          lineLenRef.current = 0;
-        })
-        .catch((err) => {
-          console.error("Error rendering crops locally:", err);
-        });
+      processCrops();
+    } else if (brushMode === "erase") {
+      scheduleMaskPreviewUpdate();
     }
-  }, [isDrawing, brushMode, removeGray, processCropsLocally, storeState]);
+  }, [
+    isDrawing,
+    brushMode,
+    removeGray,
+    processCrops,
+    scheduleMaskPreviewUpdate,
+  ]);
 
   const switchMode = useCallback(() => {
     setBrushMode((prev) => (prev === "magic" ? "draw" : "magic"));
     setActiveTool((prev) => (prev === "magic" ? "brush" : "magic"));
-  }, []);
-
-  const handleBrushSizeChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      setBrushSize(Number(e.target.value));
-    },
-    [],
-  );
+  }, [setActiveTool]);
 
   const handleContextMenu = useCallback(
     (e: MouseEvent) => {
@@ -531,6 +704,105 @@ export default function Canvas({
     },
     [floodFill, getMouseXY, maskCanvasRef, removeGray],
   );
+
+  const applyMaskFromDataUrl = useCallback(
+    (maskDataUrl: string) => {
+      const maskCanvas = maskCanvasRef.current;
+      if (!maskCanvas) return;
+      const maskCtx = maskCanvas.getContext("2d");
+      if (!maskCtx) return;
+
+      const img = new Image();
+      img.onload = () => {
+        storeState();
+        maskCtx.globalCompositeOperation = "source-over";
+        maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+        maskCtx.drawImage(img, 0, 0, maskCanvas.width, maskCanvas.height);
+        removeGray();
+      };
+      img.src = maskDataUrl;
+    },
+    [maskCanvasRef, removeGray, storeState],
+  );
+
+  const handleSaveMask = useCallback(async () => {
+    const maskCanvas = maskCanvasRef.current;
+    if (!maskCanvas || !currentImageUrl) return;
+
+    const maskDataUrl = maskCanvas.toDataURL("image/png");
+    const result = await saveMaskForImage(currentImageUrl, maskDataUrl);
+
+    if (!result.ok) {
+      console.error("Failed to save mask:", result.error);
+      return;
+    }
+
+    setShowMaskSavedToast(true);
+    if (saveToastTimeoutRef.current) {
+      window.clearTimeout(saveToastTimeoutRef.current);
+    }
+    saveToastTimeoutRef.current = window.setTimeout(() => {
+      setShowMaskSavedToast(false);
+      saveToastTimeoutRef.current = null;
+    }, 1500);
+  }, [currentImageUrl, maskCanvasRef]);
+
+  const handleMaskFileChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+
+      const datasetName = getDatasetNameFromImageUrl(currentImageUrl);
+
+      Array.from(files).forEach((file, index) => {
+        if (!file.type.startsWith("image/")) return;
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const maskDataUrl = String(e.target?.result ?? "");
+          if (!maskDataUrl) return;
+
+          if (datasetName) {
+            const result = await uploadMask({
+              datasetName,
+              labelName: file.name,
+              maskDataUrl,
+            });
+
+            if (!result.ok) {
+              console.error("Failed to upload mask:", result.error);
+            }
+          } else {
+            console.warn("Could not determine dataset name for upload.");
+          }
+
+          if (index === 0) {
+            applyMaskFromDataUrl(maskDataUrl);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+
+      event.target.value = "";
+    },
+    [applyMaskFromDataUrl, currentImageUrl],
+  );
+
+  const handleLoadMask = useCallback(() => {
+    maskFileInputRef.current?.click();
+  }, []);
+
+  const handleClearMask = useCallback(() => {
+    const maskCanvas = maskCanvasRef.current;
+    if (!maskCanvas) return;
+    const maskCtx = maskCanvas.getContext("2d");
+    if (!maskCtx) return;
+
+    storeState();
+    maskCtx.globalCompositeOperation = "source-over";
+    maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+    scheduleMaskPreviewUpdate();
+  }, [maskCanvasRef, scheduleMaskPreviewUpdate, storeState]);
 
   // Crop extraction: returns a crop object like legacy app
   const cropImageBase64 = useCallback(
@@ -650,6 +922,28 @@ export default function Canvas({
         // Initialize mask canvas to be transparent and magic overlay cleared
         maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
         magicCtx.clearRect(0, 0, magicCanvas.width, magicCanvas.height);
+        // Deleted: mask preview data-URL reset because preview rendering no longer uses `maskPreviewUrl`.
+        const previewCanvas = previewCanvasRef.current;
+        const previewCtx = previewCanvas?.getContext("2d");
+        if (previewCanvas && previewCtx) {
+          previewCanvas.width = img.width;
+          previewCanvas.height = img.height;
+          previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+        }
+
+        // Ensure initial 100% zoom immediately on load
+        const displayWidth = img.width;
+        const displayHeight = img.height;
+        imageCanvas.style.width = `${displayWidth}px`;
+        imageCanvas.style.height = `${displayHeight}px`;
+        maskCanvas.style.width = `${displayWidth}px`;
+        maskCanvas.style.height = `${displayHeight}px`;
+        magicCanvas.style.width = `${displayWidth}px`;
+        magicCanvas.style.height = `${displayHeight}px`;
+        if (previewCanvas) {
+          previewCanvas.style.width = `${displayWidth}px`;
+          previewCanvas.style.height = `${displayHeight}px`;
+        }
       };
 
       img.onerror = () => {
@@ -658,15 +952,20 @@ export default function Canvas({
 
       img.src = src;
     },
-    [maskCanvasRef, imageCanvasRef, magicPenCanvasRef],
+    [maskCanvasRef, imageCanvasRef, magicPenCanvasRef, previewCanvasRef],
   );
 
   const loadImageFromBackend = useCallback(async () => {
     const imageSrc = await fetchImageFromBackend(currentImageUrl);
     if (imageSrc) {
       loadImage(imageSrc);
+
+      const maskResult = await fetchMaskForImage(currentImageUrl);
+      if (maskResult.ok && typeof maskResult.data === "string") {
+        applyMaskFromDataUrl(maskResult.data);
+      }
     }
-  }, [currentImageUrl, loadImage]);
+  }, [applyMaskFromDataUrl, currentImageUrl, loadImage]);
 
   // Initialize canvas
   useEffect(() => {
@@ -704,46 +1003,53 @@ export default function Canvas({
       <Toolbar
         toggleFiles={toggleFiles}
         switchMode={switchMode}
-        zoomIn={() => setZoomLevel(Math.min(zoomLevel + zoomStep, maxZoom))}
-        zoomOut={() => setZoomLevel(Math.max(zoomLevel - zoomStep, minZoom))}
+        zoomIn={() => zoomTo(Math.min(zoomLevel + zoomStep, maxZoom))}
+        zoomOut={() => zoomTo(Math.max(zoomLevel - zoomStep, minZoom))}
         zoomLevel={zoomLevel}
         activeTool={activeTool}
         setActiveTool={setActiveTool}
+        onColorPickerClick={(anchor) => setColorPickerAnchor(anchor)}
+        colorPickerColor={maskPreviewColorCss}
+        onSaveMask={handleSaveMask}
+        onLoadMask={handleLoadMask}
+        onClearMask={handleClearMask}
       />
-      {/*<div className="flex items-center gap-4 p-2">
-        <button
-          onClick={() => setBrushMode((p) => (p === "draw" ? "erase" : "draw"))}
-          className={`px-4 py-2 text-white border-none rounded cursor-pointer ${
-            brushMode === "erase" ? "bg-red-500" : "bg-green-500"
-          }`}
-        >
-          {brushMode === "draw"
-            ? "Draw (White)"
-            : brushMode === "erase"
-              ? "Erase"
-              : "Draw"}
-        </button>
-
-        <div className="flex items-center gap-2.5">
-          <label htmlFor="brush-size">Brush Size:</label>
-          <input
-            id="brush-size"
-            type="range"
-            min="1"
-            max="50"
-            value={brushSize}
-            onChange={handleBrushSizeChange}
-          />
-          <span className="min-w-[30px] text-center">{brushSize}</span>
+      {showMaskSavedToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded bg-green-600 px-3 py-2 text-sm text-white shadow">
+          Mask saved to the server
         </div>
-      </div>*/}
+      )}
+      <input
+        ref={maskFileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={handleMaskFileChange}
+      />
 
+      <ColorPickerPopover
+        visible={activeTool === "colorPicker"}
+        anchor={colorPickerAnchor}
+        color={maskPreviewRgb}
+        colorCss={maskPreviewColorCss}
+        onChange={setMaskPreviewRgb}
+        onClose={() => {
+          setActiveTool("brush");
+          setColorPickerAnchor(null);
+        }}
+      />
       <div className="relative w-fit h-fit border border-gray-300 shadow-md">
         <canvas ref={imageCanvasRef} className="block" />
+        {/* Deleted: CSS mask-image overlay because it required `toDataURL()` each update and caused lag. */}
+        <canvas
+          ref={previewCanvasRef}
+          className="absolute top-0 left-0 block pointer-events-none opacity-80"
+        />
         <canvas
           key={canvasVersion}
           ref={maskCanvasRef}
-          className="absolute top-0 left-0 block cursor-crosshair opacity-80"
+          className="absolute top-0 left-0 block cursor-crosshair opacity-0"
         />
         {/* magic overlay: draws magenta strokes and renders each crop as a square image */}
         <canvas

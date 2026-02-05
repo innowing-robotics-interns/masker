@@ -4,15 +4,15 @@ import Canvas from "./components/Canvas";
 import Toolbar from "./components/Toolbar";
 import CanvasProvider from "./contexts/CanvasContext";
 import FileManager from "./components/FileManager";
-import MagicBrushSettings from "./components/Settings";
 
-import { useState } from "react";
-import { Tool } from "./types";
+import { useState, useRef } from "react";
+import type { Tool } from "./types";
 
 function App() {
   const [showFileManager, setShowFileManager] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [activeTool, setActiveTool] = useState<Tool>("brush");
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const handleToggleFiles = () => {
     setShowFileManager(!showFileManager);
@@ -22,20 +22,15 @@ function App() {
   return (
     <div className="h-screen w-screen overflow-hidden">
       <CanvasProvider>
-        <div className="h-full overflow-auto">
+        <div ref={scrollContainerRef} className="h-full overflow-auto">
           <Canvas
             toggleFiles={handleToggleFiles}
             activeTool={activeTool}
             setActiveTool={setActiveTool}
+            scrollContainerRef={scrollContainerRef}
           />
         </div>
-        <div className="fixed ">
-          {showFileManager && <FileManager />}
-          {/*<MagicBrushSettings
-            visible={showSettings}
-            onClose={() => setShowSettings(!showSettings)}
-          />*/}
-        </div>
+        <div className="fixed ">{showFileManager && <FileManager />}</div>
       </CanvasProvider>
     </div>
   );

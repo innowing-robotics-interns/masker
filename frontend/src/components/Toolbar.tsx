@@ -7,20 +7,15 @@ import {
   Undo,
   ZoomIn,
   ZoomOut,
+  FileDown,
+  Eraser,
+  Save,
+  Trash2,
 } from "lucide-react";
 import { useContext } from "react";
 import { CanvasContext } from "../contexts/Contexts";
 import ToolbarGroup from "./ToolbarGroup";
-import { Tool } from "../types";
-// List of tools:
-// - Masking brush
-// - Magic brush
-// - Undo/redo
-// - Open/upload image/mask
-// - Hide mask
-// - Hide UI
-// - Undo/Redo
-//
+import type { Tool } from "../types";
 
 export default function Toolbar({
   toggleFiles,
@@ -30,6 +25,11 @@ export default function Toolbar({
   zoomLevel,
   activeTool,
   setActiveTool,
+  onColorPickerClick,
+  colorPickerColor = "#ffffff",
+  onSaveMask,
+  onLoadMask,
+  onClearMask,
 }: {
   toggleFiles: () => void;
   switchMode: () => void;
@@ -38,8 +38,14 @@ export default function Toolbar({
   zoomLevel: number;
   activeTool: Tool;
   setActiveTool: (tool: Tool) => void;
+  onColorPickerClick?: (anchor: { x: number; y: number }) => void;
+  colorPickerColor?: string;
+  onSaveMask?: () => void;
+  onLoadMask?: () => void;
+  onClearMask?: () => void;
 }) {
   const { undo, redo } = useContext(CanvasContext);
+
   return (
     <div className="fixed top-1/2 -translate-y-1/2 left-2 z-50 flex flex-col gap-y-4">
       <ToolbarGroup>
@@ -48,6 +54,12 @@ export default function Toolbar({
           icon={Brush}
           onClick={() => setActiveTool("brush")}
           isActive={activeTool === "brush"}
+        />
+        <ToolButton
+          name="Erase Brush"
+          icon={Eraser}
+          onClick={() => setActiveTool("erase")}
+          isActive={activeTool === "erase"}
         />
         <ToolButton
           name="Magic Brush"
@@ -67,6 +79,23 @@ export default function Toolbar({
           }}
           isActive={activeTool === "files"}
         />
+        <ToolButton
+          name="Color Picker"
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            onColorPickerClick?.({ x: rect.right, y: rect.top });
+            setActiveTool("colorPicker");
+          }}
+          isActive={activeTool === "colorPicker"}
+        >
+          <span
+            className="h-5 w-5 rounded-sm border border-neutral-300"
+            style={{ backgroundColor: colorPickerColor }}
+          />
+        </ToolButton>
+        <ToolButton name="Save Mask" icon={Save} onClick={onSaveMask} />
+        <ToolButton name="Load Mask" icon={FileDown} onClick={onLoadMask} />
+        <ToolButton name="Clear Mask" icon={Trash2} onClick={onClearMask} />
       </ToolbarGroup>
       <ToolbarGroup>
         <ToolButton name="Undo" icon={Undo} onClick={undo} />
