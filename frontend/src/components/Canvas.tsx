@@ -40,6 +40,7 @@ export default function Canvas({
     y: number;
   } | null>(null);
   const maskPreviewColorCss = `rgb(${maskPreviewRgb.r}, ${maskPreviewRgb.g}, ${maskPreviewRgb.b})`;
+  const maskPreviewColorRef = useRef(maskPreviewColorCss);
   const lastPosRef = useRef<[number, number] | null>(null);
   const {
     maskCanvasRef,
@@ -94,6 +95,10 @@ export default function Canvas({
   const foregroundColor = "rgb(255, 255, 255)"; // White
   const backgroundColor = "rgb(0, 0, 0)"; // Black, used for erase mode logic
   const brushSpacing = 1;
+
+  useEffect(() => {
+    maskPreviewColorRef.current = maskPreviewColorCss;
+  }, [maskPreviewColorCss]);
 
   useEffect(() => {
     if (activeTool === "erase") {
@@ -318,11 +323,11 @@ export default function Canvas({
     ctx.drawImage(maskCanvas, 0, 0);
 
     ctx.globalCompositeOperation = "source-in";
-    ctx.fillStyle = maskPreviewColorCss;
+    ctx.fillStyle = maskPreviewColorRef.current;
     ctx.fillRect(0, 0, width, height);
 
     ctx.globalCompositeOperation = "source-over";
-  }, [maskCanvasRef, maskPreviewColorCss, previewCanvasRef]);
+  }, [maskCanvasRef, previewCanvasRef]);
 
   const scheduleMaskPreviewUpdate = useCallback(() => {
     if (previewQueuedRef.current) return;
