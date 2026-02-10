@@ -11,6 +11,7 @@ import {
   getDatasetNameFromImageUrl,
   fetchMaskForImage,
 } from "../utils/masks";
+import SliderDemo from "./Slider";
 
 export default function Canvas({
   toggleFiles,
@@ -26,7 +27,7 @@ export default function Canvas({
   const [brushMode, setBrushMode] = useState<"draw" | "magic" | "erase">(
     "draw",
   );
-  const [brushSize] = useState(5);
+  const [brushSize, setBrushSize] = useState(3);
   const [isDrawing, setIsDrawing] = useState(false);
   const [maskPreviewRgb, setMaskPreviewRgb] = useState({
     r: 255,
@@ -1044,6 +1045,21 @@ export default function Canvas({
           setColorPickerAnchor(null);
         }}
       />
+      {/* Slider */}
+      {(activeTool === "brush" || activeTool === "erase") && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-gray-100 rounded-md shadow-xl px-6 py-4 min-w-[330px]">
+          <SliderDemo
+            label="Brush Size"
+            min={1}
+            max={10}
+            step={1}
+            value={brushSize}
+            showValue={true}
+            onChange={setBrushSize}
+          />
+        </div>
+      )}
+
       <div className="relative w-fit h-fit border border-gray-300 shadow-md">
         <canvas ref={imageCanvasRef} className="block" />
         {/* Deleted: CSS mask-image overlay because it required `toDataURL()` each update and caused lag. */}
