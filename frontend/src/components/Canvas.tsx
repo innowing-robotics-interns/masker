@@ -103,6 +103,11 @@ export default function Canvas({
   const backgroundColor = "rgb(0, 0, 0)"; // Black, used for erase mode logic
   const brushSpacing = 1;
 
+  // Cursor Size Calculation (Based on brush size and zoom level)
+  const cursorRadiusPx = brushSize * zoomLevel;
+  const cursorDiameterPx = cursorRadiusPx * 2;
+  const cursorDiameterClamped = Math.max(4, Math.min(cursorDiameterPx, 400));
+
   useEffect(() => {
     maskPreviewColorRef.current = maskPreviewColorCss;
   }, [maskPreviewColorCss]);
@@ -778,7 +783,7 @@ export default function Canvas({
     scheduleMaskPreviewUpdate();
 
     // Also clear the magic pen canvas
-    // Need to be checked later 
+    // Need to be checked later
     const magicCanvas = magicPenCanvasRef.current;
     if (magicCanvas) {
       const magicCtx = magicCanvas.getContext("2d");
@@ -1053,26 +1058,19 @@ export default function Canvas({
         </div>
       )}
 
-      {/* Circle Cursor (Hasn't been fully implemented) */}
-      {isPointerOnCanvas && (
+      {/* Cursor Size That will change based on the zoomLevel and BrushSize*/}
+      {
         <div
+          className="fixed pointer-events-none z-50 rounded-full bg-gray-200 border-2 border-white"
           style={{
-            '--mouse-x': `${mousePosition.x}px`,
-            '--mouse-y': `${mousePosition.y}px`,
-          } as React.CSSProperties}
-        >
-          <div 
-            className="fixed pointer-events-none z-50"
-            style={{
-                left: 'var(--mouse-x, 0)',
-                top: 'var(--mouse-y, 0)',
-                transform: 'translate(-50%, -50%)'
-            }}
-        >
-            <div className="w-5 h-5 rounded-full bg-gray-500 opacity-20 border-2 border-white" />
-          </div>
-        </div>
-      )}
+            left: mousePosition.x, 
+            top: mousePosition.y,
+            transform: "translate(-50%, -50%)",
+            width: cursorDiameterClamped,
+            height: cursorDiameterClamped,
+          }}
+        />
+      }
 
       <div className="relative w-fit h-fit border border-gray-300 shadow-md">
         <canvas ref={imageCanvasRef} className="block" />
