@@ -28,7 +28,10 @@ export default function Canvas({
     "draw",
   );
   const [brushSize, setBrushSize] = useState(3);
+  const [isDrawing, setIsDrawing] = useState(false);
   const isDrawingRef = useRef(false);
+  const [isPointerOnCanvas, setIsPointerOnCanvas] = useState(false);
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [maskPreviewRgb, setMaskPreviewRgb] = useState({
     r: 255,
     g: 255,
@@ -53,6 +56,7 @@ export default function Canvas({
     zoomLevel,
     setZoomLevel,
     maskVersion,
+    setOnMaskChange,
   } = useContext(CanvasContext);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -494,6 +498,16 @@ export default function Canvas({
     }
   }, [applyPredictionToMask]);
 
+  const handleMouseEnter = useCallback(() => {
+    setIsPointerOnCanvas(true);
+    console.log("Mouse entered canvas");
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    setIsPointerOnCanvas(false);
+    console.log("Mouse left canvas");
+  }, []);
+
   const handleMouseDown = useCallback(
     (e: MouseEvent) => {
       if (e.button !== 0) return; // left only
@@ -501,6 +515,7 @@ export default function Canvas({
       // store current mask state for undo (for draw & eventual mask changes)
       storeState();
 
+      setIsDrawing(true);
       isDrawingRef.current = true;
       const [x, y] = getMouseXY(e);
       const maskCanvas = maskCanvasRef.current;
@@ -547,6 +562,9 @@ export default function Canvas({
 
   const handleMouseMove = useCallback(
     (e: MouseEvent) => {
+      // Update cursor position
+      setMousePosition({ x: e.clientX, y: e.clientY });
+
       if (!isDrawingRef.current) return;
 
       // Throttle to ~50fps, matching legacy canvas.js mouseMove
@@ -630,6 +648,7 @@ export default function Canvas({
 
   const handleMouseUp = useCallback(() => {
     if (!isDrawingRef.current) return;
+    setIsDrawing(false);
     isDrawingRef.current = false;
     lastPosRef.current = null;
 
@@ -757,6 +776,20 @@ export default function Canvas({
     maskCtx.globalCompositeOperation = "source-over";
     maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
     scheduleMaskPreviewUpdate();
+
+    // Also clear the magic pen canvas
+    // Need to be checked later 
+    const magicCanvas = magicPenCanvasRef.current;
+    if (magicCanvas) {
+      const magicCtx = magicCanvas.getContext("2d");
+      if (magicCtx) {
+        magicCtx.clearRect(0, 0, magicCanvas.width, magicCanvas.height);
+      }
+    }
+
+    // Clear crops array
+    cropsRef.current = [];
+    lineLenRef.current = 0;
   }, [maskCanvasRef, scheduleMaskPreviewUpdate, storeState]);
 
   // Crop extraction: returns a crop object like legacy app
@@ -927,6 +960,11 @@ export default function Canvas({
     loadImageFromBackend();
   }, [loadImageFromBackend]);
 
+  // Register callback for undo/redo to update preview
+  useEffect(() => {
+    setOnMaskChange(() => scheduleMaskPreviewUpdate);
+  }, [setOnMaskChange, scheduleMaskPreviewUpdate]);
+
   // Handle event listeners on the mask canvas (which is top-level input receiver)
   useEffect(() => {
     const canvas = maskCanvasRef.current;
@@ -936,7 +974,8 @@ export default function Canvas({
     canvas.addEventListener("mousemove", handleMouseMove);
     canvas.addEventListener("mouseup", handleMouseUp);
     canvas.addEventListener("mouseleave", handleMouseUp);
-    canvas.addEventListener("contextmenu", handleContextMenu);
+    canvas.addEventListener("mouseenter", handleMouseEnter);
+    canvas.addEventListener("mouseleave", handleMouseLeave);
 
     return () => {
       canvas.removeEventListener("mousedown", handleMouseDown);
@@ -944,12 +983,16 @@ export default function Canvas({
       canvas.removeEventListener("mouseup", handleMouseUp);
       canvas.removeEventListener("mouseleave", handleMouseUp);
       canvas.removeEventListener("contextmenu", handleContextMenu);
+      canvas.removeEventListener("mouseenter", handleMouseEnter);
+      canvas.removeEventListener("mouseleave", handleMouseLeave);
     };
   }, [
     handleMouseDown,
     handleMouseMove,
     handleMouseUp,
     handleContextMenu,
+    handleMouseEnter,
+    handleMouseLeave,
     maskCanvasRef,
   ]);
 
@@ -1007,6 +1050,27 @@ export default function Canvas({
             showValue={true}
             onChange={setBrushSize}
           />
+        </div>
+      )}
+
+      {/* Circle Cursor (Hasn't been fully implemented) */}
+      {isPointerOnCanvas && (
+        <div
+          style={{
+            '--mouse-x': `${mousePosition.x}px`,
+            '--mouse-y': `${mousePosition.y}px`,
+          } as React.CSSProperties}
+        >
+          <div 
+            className="fixed pointer-events-none z-50"
+            style={{
+                left: 'var(--mouse-x, 0)',
+                top: 'var(--mouse-y, 0)',
+                transform: 'translate(-50%, -50%)'
+            }}
+        >
+            <div className="w-5 h-5 rounded-full bg-gray-500 opacity-20 border-2 border-white" />
+          </div>
         </div>
       )}
 

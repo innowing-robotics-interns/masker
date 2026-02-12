@@ -13,6 +13,8 @@ interface CanvasContextType {
   zoomLevel: number;
   setZoomLevel: (level: number) => void;
   maskVersion: number;
+  onMaskChange: (() => void) | null;
+  setOnMaskChange: (callback: () => void) => void;
 }
 
 const defaultContext: CanvasContextType = {
@@ -28,6 +30,8 @@ const defaultContext: CanvasContextType = {
   zoomLevel: 1,
   setZoomLevel: () => {},
   maskVersion: 0,
+  onMaskChange: null,
+  setOnMaskChange: () => {},
 };
 
 export const CanvasContext = createContext<CanvasContextType>(defaultContext);
