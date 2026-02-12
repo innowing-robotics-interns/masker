@@ -12,6 +12,7 @@ interface CanvasContextType {
   setCanvasVersion: (version: number) => void;
   zoomLevel: number;
   setZoomLevel: (level: number) => void;
+  maskVersion: number;
 }
 
 const defaultContext: CanvasContextType = {
@@ -26,6 +27,7 @@ const defaultContext: CanvasContextType = {
   setCanvasVersion: () => {},
   zoomLevel: 1,
   setZoomLevel: () => {},
+  maskVersion: 0,
 };
 
 export const CanvasContext = createContext<CanvasContextType>(defaultContext);

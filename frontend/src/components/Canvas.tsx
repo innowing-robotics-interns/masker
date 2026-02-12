@@ -28,7 +28,7 @@ export default function Canvas({
     "draw",
   );
   const [brushSize, setBrushSize] = useState(3);
-  const [isDrawing, setIsDrawing] = useState(false);
+  const isDrawingRef = useRef(false);
   const [maskPreviewRgb, setMaskPreviewRgb] = useState({
     r: 255,
     g: 255,
@@ -43,6 +43,7 @@ export default function Canvas({
   const maskPreviewColorCss = `rgb(${maskPreviewRgb.r}, ${maskPreviewRgb.g}, ${maskPreviewRgb.b})`;
   const maskPreviewColorRef = useRef(maskPreviewColorCss);
   const lastPosRef = useRef<[number, number] | null>(null);
+  const lastDrawRef = useRef<number>(0);
   const {
     maskCanvasRef,
     imageCanvasRef,
@@ -51,6 +52,7 @@ export default function Canvas({
     canvasVersion,
     zoomLevel,
     setZoomLevel,
+    maskVersion,
   } = useContext(CanvasContext);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -86,7 +88,7 @@ export default function Canvas({
   const magicPenCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const cropSizeRef = useRef<number>(200); // size of each crop square
-  const cropEveryLenRef = useRef<number>(100); // distance between crops
+  const cropEveryLenRef = useRef<number>(200); // distance between crops
   const magicPenColor = "rgba(255, 0, 255, 0.9)";
 
   // Collected crops
@@ -341,7 +343,7 @@ export default function Canvas({
 
   useEffect(() => {
     scheduleMaskPreviewUpdate();
-  }, [maskPreviewColorCss, scheduleMaskPreviewUpdate]);
+  }, [maskPreviewColorCss, scheduleMaskPreviewUpdate, maskVersion]);
 
   const removeGray = useCallback(() => {
     const maskCanvas = maskCanvasRef.current;
@@ -364,130 +366,81 @@ export default function Canvas({
       data[i] = data[i + 1] = data[i + 2] = data[i + 3] = on ? 255 : 0;
     }
     maskCtx.putImageData(imageData, 0, 0);
-    storeState();
     scheduleMaskPreviewUpdate();
-  }, [maskCanvasRef, storeState, scheduleMaskPreviewUpdate]);
+  }, [maskCanvasRef, scheduleMaskPreviewUpdate]);
 
   const lineLenRef = useRef<number>(0);
 
-  // Double check this one
+  // Apply the server's merged prediction mask onto the mask canvas.
+  // Mirrors legacy applyPredictionToMask: one merged image, one pass,
+  // one removeGray, one storeState.
   const applyPredictionToMask = useCallback(
     (result: any) => {
-      if (result.predictions) {
-        result.predictions.forEach((prediction: any) => {
-          const maskCanvas = maskCanvasRef.current;
-          if (!maskCanvas) return;
-          const maskCtx = maskCanvas.getContext("2d");
-          if (!maskCtx) return;
-
-          const img = new Image();
-          img.onload = () => {
-            const tempCanvas = document.createElement("canvas");
-            tempCanvas.width = img.width;
-            tempCanvas.height = img.height;
-            const tempCtx = tempCanvas.getContext("2d");
-            if (!tempCtx) return;
-
-            tempCtx.drawImage(img, 0, 0);
-            const predictionData = tempCtx.getImageData(
-              0,
-              0,
-              img.width,
-              img.height,
-            );
-            const predictionPixels = predictionData.data;
-
-            const newMaskData = maskCtx.createImageData(img.width, img.height);
-            const newMaskPixels = newMaskData.data;
-
-            for (let i = 0; i < predictionPixels.length; i += 4) {
-              const r = predictionPixels[i];
-              const g = predictionPixels[i + 1];
-              const b = predictionPixels[i + 2];
-
-              if (r > 200 && g > 200 && b > 200) {
-                newMaskPixels[i] = 255;
-                newMaskPixels[i + 1] = 255;
-                newMaskPixels[i + 2] = 255;
-                newMaskPixels[i + 3] = 255;
-              }
-            }
-
-            const finalTempCanvas = document.createElement("canvas");
-            finalTempCanvas.width = img.width;
-            finalTempCanvas.height = img.height;
-            const finalTempCtx = finalTempCanvas.getContext("2d");
-            if (!finalTempCtx) return;
-            finalTempCtx.putImageData(newMaskData, 0, 0);
-
-            maskCtx.globalCompositeOperation = "source-over";
-            maskCtx.drawImage(
-              finalTempCanvas,
-              prediction.centerX - prediction.width / 2,
-              prediction.centerY - prediction.height / 2,
-            );
-
-            removeGray();
-            storeState();
-          };
-          img.src = prediction.mask_base64;
-        });
-      } else if (result.merged_mask_base64) {
-        const maskCanvas = maskCanvasRef.current;
-        if (!maskCanvas) return;
-        const maskCtx = maskCanvas.getContext("2d", {
-          willReadFrequently: true,
-        });
-        if (!maskCtx) return;
-
-        const img = new Image();
-        img.onload = () => {
-          const tempCanvas = document.createElement("canvas");
-          tempCanvas.width = maskCanvas.width;
-          tempCanvas.height = maskCanvas.height;
-          const tempCtx = tempCanvas.getContext("2d");
-          if (!tempCtx) return;
-
-          tempCtx.drawImage(img, 0, 0, maskCanvas.width, maskCanvas.height);
-
-          const newMaskData = tempCtx.getImageData(
-            0,
-            0,
-            tempCanvas.width,
-            tempCanvas.height,
-          );
-          const newMaskPixels = newMaskData.data;
-
-          const currentMaskData = maskCtx.getImageData(
-            0,
-            0,
-            maskCanvas.width,
-            maskCanvas.height,
-          );
-          const currentMaskPixels = currentMaskData.data;
-
-          for (let i = 0; i < newMaskPixels.length; i += 4) {
-            if (
-              newMaskPixels[i] === 255 &&
-              newMaskPixels[i + 1] === 255 &&
-              newMaskPixels[i + 2] === 255
-            ) {
-              currentMaskPixels[i] = 255;
-              currentMaskPixels[i + 1] = 255;
-              currentMaskPixels[i + 2] = 255;
-              currentMaskPixels[i + 3] = 255;
-            }
-          }
-
-          maskCtx.putImageData(currentMaskData, 0, 0);
-
-          removeGray();
-          storeState();
-        };
-        img.src = result.merged_mask_base64;
+      const maskBase64 = result.merged_mask_base64;
+      if (!maskBase64) {
+        console.warn("No merged_mask_base64 in prediction result");
+        return;
       }
+
+      const maskCanvas = maskCanvasRef.current;
+      if (!maskCanvas) return;
+      const maskCtx = maskCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+      if (!maskCtx) return;
+
+      const img = new Image();
+      img.onload = () => {
+        // Draw prediction into a temp canvas at mask dimensions
+        const tempCanvas = document.createElement("canvas");
+        tempCanvas.width = maskCanvas.width;
+        tempCanvas.height = maskCanvas.height;
+        const tempCtx = tempCanvas.getContext("2d");
+        if (!tempCtx) return;
+
+        tempCtx.drawImage(img, 0, 0, maskCanvas.width, maskCanvas.height);
+
+        // Read both prediction and current mask pixel data
+        const predictionData = tempCtx.getImageData(
+          0,
+          0,
+          maskCanvas.width,
+          maskCanvas.height,
+        );
+        const currentMaskData = maskCtx.getImageData(
+          0,
+          0,
+          maskCanvas.width,
+          maskCanvas.height,
+        );
+        const predictionPixels = predictionData.data;
+        const maskPixels = currentMaskData.data;
+
+        // Only apply white prediction pixels (> 200 threshold, matching legacy)
+        for (let i = 0; i < predictionPixels.length; i += 4) {
+          const r = predictionPixels[i];
+          const g = predictionPixels[i + 1];
+          const b = predictionPixels[i + 2];
+
+          if (r > 200 && g > 200 && b > 200) {
+            maskPixels[i] = 255;
+            maskPixels[i + 1] = 255;
+            maskPixels[i + 2] = 255;
+            maskPixels[i + 3] = 255;
+          }
+        }
+
+        // Write back once, then clean up once
+        maskCtx.putImageData(currentMaskData, 0, 0);
+        scheduleMaskPreviewUpdate();
+        removeGray();
+      };
+      img.onerror = () => {
+        console.error("Failed to load prediction mask image");
+      };
+      img.src = maskBase64;
     },
-    [maskCanvasRef, removeGray, storeState],
+    [maskCanvasRef, removeGray, scheduleMaskPreviewUpdate],
   );
 
   // Create and register a crop at a given position (center coordinates)
@@ -523,16 +476,9 @@ export default function Canvas({
     if (crops.length === 0) return;
 
     try {
-      const result = await predictCrops(crops, {
-        /* prediction options */
-      });
-      if (result && result.status === "success") {
-        applyPredictionToMask(result);
-      }
-    } catch (error) {
-      console.error("Error processing crops:", error);
-    } finally {
-      // Clear crops and magic pen canvas after processing
+      // Uses default prediction options (morphology, DBSCAN, sensitivity)
+      const result = await predictCrops(crops);
+      // Clear crops and magic pen overlay
       cropsRef.current = [];
       const magicCanvas = magicPenCanvasRef.current;
       const magicCtx = magicCanvas?.getContext("2d");
@@ -540,6 +486,11 @@ export default function Canvas({
         magicCtx.clearRect(0, 0, magicCanvas.width, magicCanvas.height);
       }
       lineLenRef.current = 0;
+      if (result && result.status === "success") {
+        applyPredictionToMask(result);
+      }
+    } catch (error) {
+      console.error("Error processing crops:", error);
     }
   }, [applyPredictionToMask]);
 
@@ -550,7 +501,7 @@ export default function Canvas({
       // store current mask state for undo (for draw & eventual mask changes)
       storeState();
 
-      setIsDrawing(true);
+      isDrawingRef.current = true;
       const [x, y] = getMouseXY(e);
       const maskCanvas = maskCanvasRef.current;
       const magicCanvas = magicPenCanvasRef.current;
@@ -596,7 +547,12 @@ export default function Canvas({
 
   const handleMouseMove = useCallback(
     (e: MouseEvent) => {
-      if (!isDrawing) return;
+      if (!isDrawingRef.current) return;
+
+      // Throttle to ~50fps, matching legacy canvas.js mouseMove
+      const now = Date.now();
+      if (now - lastDrawRef.current < 20) return;
+      lastDrawRef.current = now;
 
       e.preventDefault();
       e.stopPropagation();
@@ -638,7 +594,6 @@ export default function Canvas({
     },
     // include createCropAtPosition so linter doesn't flag missing dependency
     [
-      isDrawing,
       getMouseXY,
       drawPoint,
       maskCanvasRef,
@@ -674,8 +629,8 @@ export default function Canvas({
   ]);
 
   const handleMouseUp = useCallback(() => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
+    if (!isDrawingRef.current) return;
+    isDrawingRef.current = false;
     lastPosRef.current = null;
 
     if (brushMode === "draw") {
@@ -685,13 +640,7 @@ export default function Canvas({
     } else if (brushMode === "erase") {
       scheduleMaskPreviewUpdate();
     }
-  }, [
-    isDrawing,
-    brushMode,
-    removeGray,
-    processCrops,
-    scheduleMaskPreviewUpdate,
-  ]);
+  }, [brushMode, removeGray, processCrops, scheduleMaskPreviewUpdate]);
 
   const switchMode = useCallback(() => {
     setBrushMode((prev) => (prev === "magic" ? "draw" : "magic"));
@@ -1046,6 +995,7 @@ export default function Canvas({
         }}
       />
       {/* Slider */}
+
       {(activeTool === "brush" || activeTool === "erase") && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-gray-100 rounded-md shadow-xl px-6 py-4 min-w-[330px]">
           <SliderDemo

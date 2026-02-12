@@ -27,8 +27,22 @@ interface PredictionOptions {
   sensitivity?: number;
 }
 
+/** Default prediction options matching the legacy canvas.js constructor */
+const DEFAULT_PREDICTION_OPTIONS: Required<PredictionOptions> = {
+  predict_mode: "normal",
+  apply_morphology: true,
+  morph_kernel_size: 3,
+  morph_iterations: 2,
+  apply_dbscan: true,
+  db_eps: 10,
+  db_min_samples: 5,
+  sensitivity: 2,
+};
+
 /**
- * Sends the collected crops to the server for prediction.
+ * Sends all collected crops to the server in a single batch request for prediction.
+ * This mirrors the legacy `sendCropsForPrediction` which POSTs everything at once
+ * to `/magic_pen/predict_crops` instead of firing N individual requests.
  *
  * @param {Crop[]} crops - An array of crop objects to be sent for prediction.
  * @param {PredictionOptions} options - Additional options for the prediction.
@@ -36,56 +50,50 @@ interface PredictionOptions {
  */
 export const predictCrops = async (
   crops: Crop[],
-  options: PredictionOptions,
+  options: PredictionOptions = {},
 ): Promise<any> => {
-  const predictions = await Promise.all(
-    crops.map(async (crop) => {
-      try {
-        const response = await fetch("/predict", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            image: crop.image_base64,
-            ...options,
-          }),
-        });
+  if (crops.length === 0) {
+    console.warn("No crops to send for prediction");
+    return { status: "error", message: "No crops to send" };
+  }
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+  const mergedOptions = { ...DEFAULT_PREDICTION_OPTIONS, ...options };
 
-        const result = await response.json();
-        // Add the crop's coordinates to the result, so we know where to place the mask
-        return {
-          ...result,
-          centerX: crop.centerX,
-          centerY: crop.centerY,
-          width: crop.width,
-          height: crop.height,
-        };
-      } catch (error) {
-        console.error("Error sending a crop for prediction:", error);
-        return null;
-      }
-    }),
-  );
+  try {
+    console.log(`Sending ${crops.length} crops for prediction...`);
 
-  // Filter out any failed predictions
-  const successfulPredictions = predictions.filter(
-    (p) => p && p.status === "success",
-  );
+    const response = await fetch("/magic_pen/predict_crops", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        crops,
+        mode: mergedOptions.predict_mode,
+        apply_morphology: mergedOptions.apply_morphology,
+        morph_kernel_size: mergedOptions.morph_kernel_size,
+        morph_iterations: mergedOptions.morph_iterations,
+        apply_dbscan: mergedOptions.apply_dbscan,
+        db_eps: mergedOptions.db_eps,
+        db_min_samples: mergedOptions.db_min_samples,
+        sensitivity: mergedOptions.sensitivity,
+      }),
+    });
 
-  if (successfulPredictions.length > 0) {
-    return {
-      status: "success",
-      predictions: successfulPredictions,
-    };
-  } else {
-    return {
-      status: "error",
-      message: "All crop predictions failed.",
-    };
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (result.status === "success") {
+      console.log(`Successfully processed ${result.num_crops_processed} crops`);
+      return result;
+    } else {
+      throw new Error(result.message || "Prediction failed");
+    }
+  } catch (error) {
+    console.error("Error sending crops for prediction:", error);
+    throw error;
   }
 };
