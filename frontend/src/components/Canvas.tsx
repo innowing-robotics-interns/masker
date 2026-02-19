@@ -11,6 +11,7 @@ import {
   getDatasetNameFromImageUrl,
   fetchMaskForImage,
 } from "../utils/masks";
+import { uploadImageToBackend } from "../utils/fileUpload";
 import SliderDemo from "./Slider";
 
 export default function Canvas({
@@ -30,7 +31,7 @@ export default function Canvas({
   const [brushSize, setBrushSize] = useState(3);
   const [isDrawing, setIsDrawing] = useState(false);
   const isDrawingRef = useRef(false);
-  const [isPointerOnCanvas, setIsPointerOnCanvas] = useState(false);
+  const [isPointer, setIsPointerOnCanvas] = useState(false);
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [maskPreviewRgb, setMaskPreviewRgb] = useState({
     r: 255,
@@ -60,6 +61,7 @@ export default function Canvas({
   } = useContext(CanvasContext);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskFileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageFileInputRef = useRef<HTMLInputElement | null>(null);
   const previewRafRef = useRef<number | null>(null);
   const previewQueuedRef = useRef(false);
   const minZoom = 0.2;
@@ -771,6 +773,50 @@ export default function Canvas({
     maskFileInputRef.current?.click();
   }, []);
 
+  const handleLoadImage = useCallback(() => {
+    imageFileInputRef.current?.click();
+  }, []);
+
+  const handleImageFileChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+
+      // Currently just uses test1 dataset for uploads, but ideally should parse from URL or have user select
+      const datasetName = getDatasetNameFromImageUrl(currentImageUrl) || "test1";
+      console.log("Uploading to dataset:", datasetName);
+
+      Array.from(files).forEach(async (file) => {
+        if (!file.type.startsWith("image/")) {
+          console.warn("Selected file is not an image:", file.name);
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const imageDataUrl = String(e.target?.result ?? "");
+          if (!imageDataUrl) return;
+
+          const result = await uploadImageToBackend({
+            datasetName,
+            imageName: file.name,
+            imageDataUrl,
+          });
+
+          if (result.ok) {
+            console.log("Image uploaded successfully:", file.name);
+          } else {
+            console.error("Failed to upload image:", result.error);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+
+      event.target.value = "";
+    },
+    [currentImageUrl],
+  );
+
   const handleClearMask = useCallback(() => {
     const maskCanvas = maskCanvasRef.current;
     if (!maskCanvas) return;
@@ -1015,6 +1061,7 @@ export default function Canvas({
         colorPickerColor={maskPreviewColorCss}
         onSaveMask={handleSaveMask}
         onLoadMask={handleLoadMask}
+        onLoadImage={handleLoadImage}
         onClearMask={handleClearMask}
       />
       {showMaskSavedToast && (
@@ -1031,6 +1078,15 @@ export default function Canvas({
         onChange={handleMaskFileChange}
       />
 
+      <input
+        ref={imageFileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={handleImageFileChange}
+      />
+
       <ColorPickerPopover
         visible={activeTool === "colorPicker"}
         anchor={colorPickerAnchor}
@@ -1042,7 +1098,8 @@ export default function Canvas({
           setColorPickerAnchor(null);
         }}
       />
-      {/* Slider */}
+
+      {/* Slider Implementation*/}
 
       {(activeTool === "brush" || activeTool === "erase") && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-gray-100 rounded-md shadow-xl px-6 py-4 min-w-[330px]">

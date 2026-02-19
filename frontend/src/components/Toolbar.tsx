@@ -1,4 +1,5 @@
 import ToolButton from "./ToolButton";
+import { UploadIcon }from "./icons/lucide-upload";
 import {
   Brush,
   FolderSearch,
@@ -29,6 +30,7 @@ export default function Toolbar({
   colorPickerColor = "#ffffff",
   onSaveMask,
   onLoadMask,
+  onLoadImage,
   onClearMask,
 }: {
   toggleFiles: () => void;
@@ -42,6 +44,7 @@ export default function Toolbar({
   colorPickerColor?: string;
   onSaveMask?: () => void;
   onLoadMask?: () => void;
+  onLoadImage?: () => void;
   onClearMask?: () => void;
 }) {
   const { undo, redo } = useContext(CanvasContext);
@@ -95,6 +98,7 @@ export default function Toolbar({
         </ToolButton>
         <ToolButton name="Save Mask" icon={Save} onClick={onSaveMask} />
         <ToolButton name="Load Mask" icon={FileDown} onClick={onLoadMask} />
+        <ToolButton name="Upload Image" icon={UploadIcon} onClick={onLoadImage} />
         <ToolButton name="Clear Mask" icon={Trash2} onClick={onClearMask} />
       </ToolbarGroup>
       <ToolbarGroup>
