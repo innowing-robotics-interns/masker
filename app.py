@@ -246,12 +246,14 @@ def is_base64_png(data: str) -> bool:
         print(f"Error decoding PNG: {e}")
         return False
 
-def save(path:str, data:str, postfix:str='.png') -> bool:
+def save(path: str, data: str) -> bool:
     try:
         if isinstance(data, str):
             data = data.split(',')[-1]  # Remove the base64 prefix if present
             decoded_data = base64.b64decode(data)
-            path = path.split('.')[0] + postfix
+            root, ext = splitext(path)
+            if ext == "":
+                path = f"{path}.png"
             with open(path, 'wb') as f:
                 f.write(decoded_data)
             return True

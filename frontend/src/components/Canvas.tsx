@@ -58,6 +58,7 @@ export default function Canvas({
     setZoomLevel,
     maskVersion,
     setOnMaskChange,
+    setCurrentImageUrl,
   } = useContext(CanvasContext);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -898,7 +899,8 @@ export default function Canvas({
       if (!files || files.length === 0) return;
 
       // Currently just uses test1 dataset for uploads, but ideally should parse from URL or have user select
-      const datasetName = getDatasetNameFromImageUrl(currentImageUrl) || "test1";
+      const datasetName =
+        getDatasetNameFromImageUrl(currentImageUrl) || "test1";
       console.log("Uploading to dataset:", datasetName);
 
       Array.from(files).forEach(async (file) => {
@@ -920,6 +922,7 @@ export default function Canvas({
 
           if (result.ok) {
             console.log("Image uploaded successfully:", file.name);
+            setCurrentImageUrl(`/datasets/test1/images/${file.name}`);
           } else {
             console.error("Failed to upload image:", result.error);
           }
@@ -929,7 +932,7 @@ export default function Canvas({
 
       event.target.value = "";
     },
-    [currentImageUrl],
+    [currentImageUrl, setCurrentImageUrl],
   );
 
   const handleClearMask = useCallback(() => {
@@ -1155,7 +1158,7 @@ export default function Canvas({
         <div
           className="fixed pointer-events-none z-50 rounded-full bg-gray-200 border-2 border-white"
           style={{
-            left: mousePosition.x, 
+            left: mousePosition.x,
             top: mousePosition.y,
             transform: "translate(-50%, -50%)",
             width: cursorDiameterClamped,

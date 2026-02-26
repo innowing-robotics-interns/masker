@@ -12,6 +12,7 @@ export default function FileManager({
 
   const handleImageClick = (url: string) => {
     setCurrentImageUrl(url);
+    console.log("Image clicked:", url);
   };
 
   useEffect(() => {
