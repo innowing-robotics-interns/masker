@@ -11,6 +11,7 @@ import {
   getDatasetNameFromImageUrl,
   fetchMaskForImage,
 } from "../utils/masks";
+import { uploadImageToBackend } from "../utils/fileUpload";
 import SliderDemo from "./Slider";
 
 export default function Canvas({
@@ -28,7 +29,10 @@ export default function Canvas({
     "draw",
   );
   const [brushSize, setBrushSize] = useState(3);
+  const [isDrawing, setIsDrawing] = useState(false);
   const isDrawingRef = useRef(false);
+  const [isPointer, setIsPointerOnCanvas] = useState(false);
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [maskPreviewRgb, setMaskPreviewRgb] = useState({
     r: 255,
     g: 255,
@@ -53,9 +57,11 @@ export default function Canvas({
     zoomLevel,
     setZoomLevel,
     maskVersion,
+    setOnMaskChange,
   } = useContext(CanvasContext);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const maskFileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageFileInputRef = useRef<HTMLInputElement | null>(null);
   const previewRafRef = useRef<number | null>(null);
   const previewQueuedRef = useRef(false);
   const minZoom = 0.2;
@@ -98,6 +104,11 @@ export default function Canvas({
   const foregroundColor = "rgb(255, 255, 255)"; // White
   const backgroundColor = "rgb(0, 0, 0)"; // Black, used for erase mode logic
   const brushSpacing = 1;
+
+  // Cursor Size Calculation (Based on brush size and zoom level)
+  const cursorRadiusPx = brushSize * zoomLevel;
+  const cursorDiameterPx = cursorRadiusPx * 2;
+  const cursorDiameterClamped = Math.max(4, Math.min(cursorDiameterPx, 400));
 
   useEffect(() => {
     maskPreviewColorRef.current = maskPreviewColorCss;
@@ -602,6 +613,16 @@ export default function Canvas({
     }
   }, [applyPredictionToMask]);
 
+  const handleMouseEnter = useCallback(() => {
+    setIsPointerOnCanvas(true);
+    console.log("Mouse entered canvas");
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    setIsPointerOnCanvas(false);
+    console.log("Mouse left canvas");
+  }, []);
+
   const handleMouseDown = useCallback(
     (e: MouseEvent) => {
       if (e.button !== 0) return; // left only
@@ -609,6 +630,7 @@ export default function Canvas({
       // store current mask state for undo (for draw & eventual mask changes)
       storeState();
 
+      setIsDrawing(true);
       isDrawingRef.current = true;
       const [x, y] = getMouseXY(e);
       const maskCanvas = maskCanvasRef.current;
@@ -662,6 +684,9 @@ export default function Canvas({
 
   const handleMouseMove = useCallback(
     (e: MouseEvent) => {
+      // Update cursor position
+      setMousePosition({ x: e.clientX, y: e.clientY });
+
       if (!isDrawingRef.current) return;
 
       // Throttle to ~50fps, matching legacy canvas.js mouseMove
@@ -745,6 +770,7 @@ export default function Canvas({
 
   const handleMouseUp = useCallback(() => {
     if (!isDrawingRef.current) return;
+    setIsDrawing(false);
     isDrawingRef.current = false;
     lastPosRef.current = null;
 
@@ -862,6 +888,50 @@ export default function Canvas({
     maskFileInputRef.current?.click();
   }, []);
 
+  const handleLoadImage = useCallback(() => {
+    imageFileInputRef.current?.click();
+  }, []);
+
+  const handleImageFileChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+
+      // Currently just uses test1 dataset for uploads, but ideally should parse from URL or have user select
+      const datasetName = getDatasetNameFromImageUrl(currentImageUrl) || "test1";
+      console.log("Uploading to dataset:", datasetName);
+
+      Array.from(files).forEach(async (file) => {
+        if (!file.type.startsWith("image/")) {
+          console.warn("Selected file is not an image:", file.name);
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const imageDataUrl = String(e.target?.result ?? "");
+          if (!imageDataUrl) return;
+
+          const result = await uploadImageToBackend({
+            datasetName,
+            imageName: file.name,
+            imageDataUrl,
+          });
+
+          if (result.ok) {
+            console.log("Image uploaded successfully:", file.name);
+          } else {
+            console.error("Failed to upload image:", result.error);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+
+      event.target.value = "";
+    },
+    [currentImageUrl],
+  );
+
   const handleClearMask = useCallback(() => {
     const maskCanvas = maskCanvasRef.current;
     if (!maskCanvas) return;
@@ -872,6 +942,20 @@ export default function Canvas({
     maskCtx.globalCompositeOperation = "source-over";
     maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
     scheduleMaskPreviewUpdate();
+
+    // Also clear the magic pen canvas
+    // Need to be checked later
+    const magicCanvas = magicPenCanvasRef.current;
+    if (magicCanvas) {
+      const magicCtx = magicCanvas.getContext("2d");
+      if (magicCtx) {
+        magicCtx.clearRect(0, 0, magicCanvas.width, magicCanvas.height);
+      }
+    }
+
+    // Clear crops array
+    cropsRef.current = [];
+    lineLenRef.current = 0;
   }, [maskCanvasRef, scheduleMaskPreviewUpdate, storeState]);
 
   // Load image and match sizes for all canvases
@@ -962,6 +1046,11 @@ export default function Canvas({
     loadImageFromBackend();
   }, [loadImageFromBackend]);
 
+  // Register callback for undo/redo to update preview
+  useEffect(() => {
+    setOnMaskChange(() => scheduleMaskPreviewUpdate);
+  }, [setOnMaskChange, scheduleMaskPreviewUpdate]);
+
   // Handle event listeners on the mask canvas (which is top-level input receiver)
   useEffect(() => {
     const canvas = maskCanvasRef.current;
@@ -971,7 +1060,8 @@ export default function Canvas({
     canvas.addEventListener("mousemove", handleMouseMove);
     canvas.addEventListener("mouseup", handleMouseUp);
     canvas.addEventListener("mouseleave", handleMouseUp);
-    canvas.addEventListener("contextmenu", handleContextMenu);
+    canvas.addEventListener("mouseenter", handleMouseEnter);
+    canvas.addEventListener("mouseleave", handleMouseLeave);
 
     return () => {
       canvas.removeEventListener("mousedown", handleMouseDown);
@@ -979,12 +1069,16 @@ export default function Canvas({
       canvas.removeEventListener("mouseup", handleMouseUp);
       canvas.removeEventListener("mouseleave", handleMouseUp);
       canvas.removeEventListener("contextmenu", handleContextMenu);
+      canvas.removeEventListener("mouseenter", handleMouseEnter);
+      canvas.removeEventListener("mouseleave", handleMouseLeave);
     };
   }, [
     handleMouseDown,
     handleMouseMove,
     handleMouseUp,
     handleContextMenu,
+    handleMouseEnter,
+    handleMouseLeave,
     maskCanvasRef,
   ]);
 
@@ -1002,6 +1096,7 @@ export default function Canvas({
         colorPickerColor={maskPreviewColorCss}
         onSaveMask={handleSaveMask}
         onLoadMask={handleLoadMask}
+        onLoadImage={handleLoadImage}
         onClearMask={handleClearMask}
       />
       {showMaskSavedToast && (
@@ -1018,6 +1113,15 @@ export default function Canvas({
         onChange={handleMaskFileChange}
       />
 
+      <input
+        ref={imageFileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={handleImageFileChange}
+      />
+
       <ColorPickerPopover
         visible={activeTool === "colorPicker"}
         anchor={colorPickerAnchor}
@@ -1029,7 +1133,8 @@ export default function Canvas({
           setColorPickerAnchor(null);
         }}
       />
-      {/* Slider */}
+
+      {/* Slider Implementation*/}
 
       {(activeTool === "brush" || activeTool === "erase") && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-gray-100 rounded-md shadow-xl px-6 py-4 min-w-[330px]">
@@ -1044,6 +1149,20 @@ export default function Canvas({
           />
         </div>
       )}
+
+      {/* Cursor Size That will change based on the zoomLevel and BrushSize*/}
+      {
+        <div
+          className="fixed pointer-events-none z-50 rounded-full bg-gray-200 border-2 border-white"
+          style={{
+            left: mousePosition.x, 
+            top: mousePosition.y,
+            transform: "translate(-50%, -50%)",
+            width: cursorDiameterClamped,
+            height: cursorDiameterClamped,
+          }}
+        />
+      }
 
       <div className="relative w-fit h-fit border border-gray-300 shadow-md">
         <canvas ref={imageCanvasRef} className="block" />

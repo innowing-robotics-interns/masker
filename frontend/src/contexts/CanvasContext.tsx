@@ -12,6 +12,7 @@ export default function CanvasProvider({
   const [canvasVersion, setCanvasVersion] = useState(0);
   const [maskVersion, setMaskVersion] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(1);
+  const [onMaskChange, setOnMaskChange] = useState<(() => void) | null>(null);
   const maxHistorySize = 20;
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -50,9 +51,14 @@ export default function CanvasProvider({
 
         ctx.putImageData(previousState, 0, 0);
         setMaskVersion((v) => v + 1);
+        
+        // Trigger preview update
+        if (onMaskChange) {
+          onMaskChange();
+        }
       }
     }
-  }, [past, maskCanvasRef, setMaskVersion]);
+  }, [past, maskCanvasRef, setMaskVersion, onMaskChange]);
 
   const redo = useCallback(() => {
     if (future.length > 0 && maskCanvasRef.current) {
@@ -71,9 +77,14 @@ export default function CanvasProvider({
 
         ctx.putImageData(nextState, 0, 0);
         setMaskVersion((v) => v + 1);
+        
+        // Trigger preview update
+        if (onMaskChange) {
+          onMaskChange();
+        }
       }
     }
-  }, [future, maskCanvasRef, setMaskVersion]);
+  }, [future, maskCanvasRef, setMaskVersion, onMaskChange]);
 
   return (
     <CanvasContext
@@ -90,6 +101,8 @@ export default function CanvasProvider({
         zoomLevel,
         setZoomLevel,
         maskVersion,
+        onMaskChange,
+        setOnMaskChange,
       }}
     >
       {children}
