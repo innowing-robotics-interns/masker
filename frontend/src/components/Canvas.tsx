@@ -443,33 +443,141 @@ export default function Canvas({
     [maskCanvasRef, removeGray, scheduleMaskPreviewUpdate],
   );
 
-  // Create and register a crop at a given position (center coordinates)
-  function createCropAtPosition(centerX: number, centerY: number) {
-    try {
-      const cropSize = cropSizeRef.current;
-      const cropData = cropImageBase64(centerX, centerY, cropSize, cropSize);
+  // Crop extraction: returns a crop object like legacy app
+  const cropImageBase64 = useCallback(
+    (
+      centerX: number,
+      centerY: number,
+      cropWidth: number,
+      cropHeight: number,
+    ) => {
+      const imgCanvas = imageCanvasRef.current;
+      if (!imgCanvas) {
+        return {
+          img: "",
+          centerX,
+          centerY,
+          width: cropWidth,
+          height: cropHeight,
+        };
+      }
 
-      const crop = {
-        id: cropsRef.current.length,
-        image_base64: cropData.img,
+      // Convert from displayed coordinates (mouse position) to canvas pixels.
+      const startX = Math.floor(centerX - cropWidth / 2);
+      const startY = Math.floor(centerY - cropHeight / 2);
+
+      const clampedStartX = Math.max(0, startX);
+      const clampedStartY = Math.max(0, startY);
+      const clampedEndX = Math.min(imgCanvas.width, startX + cropWidth);
+      const clampedEndY = Math.min(imgCanvas.height, startY + cropHeight);
+
+      const actualCropWidth = clampedEndX - clampedStartX;
+      const actualCropHeight = clampedEndY - clampedStartY;
+
+      // Prepare crop canvas of requested dimensions and center the extracted region
+      const cropCanvas = document.createElement("canvas");
+      cropCanvas.width = cropWidth;
+      cropCanvas.height = cropHeight;
+      const cropCtx = cropCanvas.getContext("2d")!;
+      cropCtx.fillStyle = "rgb(0,0,0)";
+      cropCtx.fillRect(0, 0, cropWidth, cropHeight);
+
+      if (actualCropWidth > 0 && actualCropHeight > 0) {
+        const tmp = document.createElement("canvas");
+        tmp.width = actualCropWidth;
+        tmp.height = actualCropHeight;
+        const tmpCtx = tmp.getContext("2d")!;
+        const imgCtx = imageCanvasRef.current!.getContext("2d")!;
+        const imgData = imgCtx.getImageData(
+          clampedStartX,
+          clampedStartY,
+          actualCropWidth,
+          actualCropHeight,
+        );
+        tmpCtx.putImageData(imgData, 0, 0);
+
+        const offsetX = Math.floor((cropWidth - actualCropWidth) / 2);
+        const offsetY = Math.floor((cropHeight - actualCropHeight) / 2);
+
+        cropCtx.drawImage(
+          tmp,
+          0,
+          0,
+          actualCropWidth,
+          actualCropHeight,
+          offsetX,
+          offsetY,
+          actualCropWidth,
+          actualCropHeight,
+        );
+      }
+
+      return {
+        img: cropCanvas.toDataURL("image/png"),
         centerX,
         centerY,
-        width: cropSize,
-        height: cropSize,
-        canvas_width: imageCanvasRef.current ? imageCanvasRef.current.width : 0,
-        canvas_height: imageCanvasRef.current
-          ? imageCanvasRef.current.height
-          : 0,
-        timestamp: Date.now(),
-        line_distance: lineLenRef.current,
+        width: cropWidth,
+        height: cropHeight,
       };
+    },
+    [imageCanvasRef],
+  );
+  // Create and register a crop at a given position (center coordinates)
+  const createCropAtPosition = useCallback(
+    (centerX: number, centerY: number) => {
+      try {
+        const cropSize = cropSizeRef.current;
+        const cropData = cropImageBase64(centerX, centerY, cropSize, cropSize);
 
-      return crop;
-    } catch (error) {
-      console.error("Error creating crop at position:", error);
-      return null;
-    }
-  }
+        if (!imageCanvasRef) return null;
+
+        // For debugging purposes, draws a square
+        const ctx = imageCanvasRef.current?.getContext("2d");
+        if (ctx) {
+          ctx.fillStyle = `rgba(128, 0, 128, ${0.5})`;
+          ctx.fillRect(
+            centerX - cropSize / 2,
+            centerY - cropSize / 2,
+            cropSize,
+            cropSize,
+          );
+
+          // Red stroke border
+          ctx.strokeStyle = "purple";
+          ctx.lineWidth = 4;
+          ctx.strokeRect(
+            centerX - cropSize / 2,
+            centerY - cropSize / 2,
+            cropSize,
+            cropSize,
+          );
+        }
+
+        const crop = {
+          id: cropsRef.current.length,
+          image_base64: cropData.img,
+          centerX,
+          centerY,
+          width: cropSize,
+          height: cropSize,
+          canvas_width: imageCanvasRef.current
+            ? imageCanvasRef.current.width
+            : 0,
+          canvas_height: imageCanvasRef.current
+            ? imageCanvasRef.current.height
+            : 0,
+          timestamp: Date.now(),
+          line_distance: lineLenRef.current,
+        };
+
+        return crop;
+      } catch (error) {
+        console.error("Error creating crop at position:", error);
+        return null;
+      }
+    },
+    [imageCanvasRef, lineLenRef, cropSizeRef, cropImageBase64],
+  );
 
   const processCrops = useCallback(async () => {
     const crops = cropsRef.current;
@@ -529,11 +637,17 @@ export default function Canvas({
 
         // draw initial point on magic overlay
         drawPoint(x, y, magicCtx, "magic", lineLenRef);
+
+        const crop = createCropAtPosition(x, y);
+        if (crop) {
+          cropsRef.current.push(crop);
+        }
       }
 
       lastPosRef.current = [x, y];
 
       // Update the preview canvas
+      scheduleMaskPreviewUpdate();
     },
     [
       drawPoint,
@@ -542,6 +656,7 @@ export default function Canvas({
       storeState,
       brushMode,
       scheduleMaskPreviewUpdate,
+      createCropAtPosition,
     ],
   );
 
@@ -575,7 +690,7 @@ export default function Canvas({
         // Use cropEveryLenRef to decide interval. This mirrors legacy behavior.
         const cropEvery = cropEveryLenRef.current;
         const lastCropCount = cropsRef.current.length;
-        const expectedCount = Math.floor(lineLenRef.current / cropEvery);
+        const expectedCount = Math.ceil(lineLenRef.current / cropEvery);
 
         if (expectedCount > lastCropCount) {
           // Create one or more crops to catch up
@@ -758,86 +873,6 @@ export default function Canvas({
     maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
     scheduleMaskPreviewUpdate();
   }, [maskCanvasRef, scheduleMaskPreviewUpdate, storeState]);
-
-  // Crop extraction: returns a crop object like legacy app
-  const cropImageBase64 = useCallback(
-    (
-      centerX: number,
-      centerY: number,
-      cropWidth: number,
-      cropHeight: number,
-    ) => {
-      const imgCanvas = imageCanvasRef.current;
-      if (!imgCanvas) {
-        return {
-          img: "",
-          centerX,
-          centerY,
-          width: cropWidth,
-          height: cropHeight,
-        };
-      }
-
-      // Convert from displayed coordinates (mouse position) to canvas pixels.
-      const startX = Math.floor(centerX - cropWidth / 2);
-      const startY = Math.floor(centerY - cropHeight / 2);
-
-      const clampedStartX = Math.max(0, startX);
-      const clampedStartY = Math.max(0, startY);
-      const clampedEndX = Math.min(imgCanvas.width, startX + cropWidth);
-      const clampedEndY = Math.min(imgCanvas.height, startY + cropHeight);
-
-      const actualCropWidth = clampedEndX - clampedStartX;
-      const actualCropHeight = clampedEndY - clampedStartY;
-
-      // Prepare crop canvas of requested dimensions and center the extracted region
-      const cropCanvas = document.createElement("canvas");
-      cropCanvas.width = cropWidth;
-      cropCanvas.height = cropHeight;
-      const cropCtx = cropCanvas.getContext("2d")!;
-      cropCtx.fillStyle = "rgb(0,0,0)";
-      cropCtx.fillRect(0, 0, cropWidth, cropHeight);
-
-      if (actualCropWidth > 0 && actualCropHeight > 0) {
-        const tmp = document.createElement("canvas");
-        tmp.width = actualCropWidth;
-        tmp.height = actualCropHeight;
-        const tmpCtx = tmp.getContext("2d")!;
-        const imgCtx = imageCanvasRef.current!.getContext("2d")!;
-        const imgData = imgCtx.getImageData(
-          clampedStartX,
-          clampedStartY,
-          actualCropWidth,
-          actualCropHeight,
-        );
-        tmpCtx.putImageData(imgData, 0, 0);
-
-        const offsetX = Math.floor((cropWidth - actualCropWidth) / 2);
-        const offsetY = Math.floor((cropHeight - actualCropHeight) / 2);
-
-        cropCtx.drawImage(
-          tmp,
-          0,
-          0,
-          actualCropWidth,
-          actualCropHeight,
-          offsetX,
-          offsetY,
-          actualCropWidth,
-          actualCropHeight,
-        );
-      }
-
-      return {
-        img: cropCanvas.toDataURL("image/png"),
-        centerX,
-        centerY,
-        width: cropWidth,
-        height: cropHeight,
-      };
-    },
-    [imageCanvasRef],
-  );
 
   // Load image and match sizes for all canvases
   const loadImage = useCallback(
