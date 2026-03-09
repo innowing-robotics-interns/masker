@@ -12,6 +12,7 @@ import {
   Eraser,
   Save,
   Trash2,
+  ScanSearch,
 } from "lucide-react";
 import { useContext } from "react";
 import { CanvasContext } from "../contexts/Contexts";
@@ -32,6 +33,7 @@ export default function Toolbar({
   onLoadMask,
   onLoadImage,
   onClearMask,
+  onAnalyseSam,
 }: {
   toggleFiles: () => void;
   switchMode: () => void;
@@ -46,6 +48,7 @@ export default function Toolbar({
   onLoadMask?: () => void;
   onLoadImage?: () => void;
   onClearMask?: () => void;
+  onAnalyseSam?: () => void;
 }) {
   const { undo, redo } = useContext(CanvasContext);
 
@@ -97,6 +100,11 @@ export default function Toolbar({
               style={{ backgroundColor: colorPickerColor }}
             />
           </ToolButton>
+          <ToolButton
+            name="Analyse Image using SAM"
+            icon={ScanSearch}
+            onClick={onAnalyseSam}
+          />
           <ToolButton name="Save Mask" icon={Save} onClick={onSaveMask} />
           <ToolButton name="Load Mask" icon={FileDown} onClick={onLoadMask} />
           <ToolButton

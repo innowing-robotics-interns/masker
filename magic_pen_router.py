@@ -3,11 +3,13 @@ import cv2
 import numpy as np
 import base64
 from predictor import Predictor
+from sam_predictor import SAMPredictor
 
 magic_pen_router = Blueprint('magic_pen_router', __name__)
 
-# Initialize predictor (you may want to move this to app.py if shared)
+# Initialize predictors
 predictor = Predictor(model_settings_path='model_settings.yaml')
+sam_predictor = SAMPredictor()
 
 class PredictionMerger:
     def __init__(self, canvas_width, canvas_height):
@@ -476,4 +478,58 @@ def predict_single_crop():
         return jsonify({
             "status": "error",
             "message": f"Error processing single crop: {str(e)}"
+        }), 500
+
+
+@magic_pen_router.route('/predict_sam', methods=['POST'])
+def predict_sam():
+    """
+    Run SAM3 text-prompt segmentation on a full image.
+
+    Expected JSON payload:
+    {
+        "image_base64": "data:image/png;base64,..."
+    }
+
+    Returns:
+    {
+        "status": "success",
+        "merged_mask_base64": "data:image/png;base64,..."
+    }
+    """
+    try:
+        if not request.is_json:
+            return jsonify({
+                "status": "error",
+                "message": "Request must be JSON"
+            }), 400
+
+        data = request.json
+        image_base64 = data.get('image_base64')
+        if not image_base64:
+            return jsonify({
+                "status": "error",
+                "message": "No image data provided"
+            }), 400
+
+        image = decode_base64_image(image_base64)
+        prediction = sam_predictor(image)
+
+        if prediction.ndim > 2:
+            prediction = prediction.squeeze()
+
+        binary_mask = (prediction > 0.5).astype(np.uint8) * 255
+        mask_base64 = encode_mask_to_base64(binary_mask)
+
+        return jsonify({
+            "status": "success",
+            "merged_mask_base64": mask_base64
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": f"Error running SAM prediction: {str(e)}"
         }), 500

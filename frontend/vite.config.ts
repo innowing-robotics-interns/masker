@@ -20,7 +20,7 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
-      "/magic_pen/predict_crops": {
+      "/magic_pen": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },

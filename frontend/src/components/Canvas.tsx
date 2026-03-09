@@ -4,6 +4,7 @@ import { CanvasContext } from "../contexts/Contexts";
 import type { Tool, Crop } from "../types";
 import Toolbar from "./Toolbar";
 import { predictCrops } from "../api/magicPen";
+import { predictSam } from "../api/samPredict";
 import ColorPickerPopover from "./ColorPickerPopover";
 import {
   saveMaskForImage,
@@ -39,6 +40,7 @@ export default function Canvas({
     b: 255,
   });
   const [showMaskSavedToast, setShowMaskSavedToast] = useState(false);
+  const [isSamLoading, setIsSamLoading] = useState(false);
   const saveToastTimeoutRef = useRef<number | null>(null);
   const [colorPickerAnchor, setColorPickerAnchor] = useState<{
     x: number;
@@ -961,6 +963,26 @@ export default function Canvas({
     lineLenRef.current = 0;
   }, [maskCanvasRef, scheduleMaskPreviewUpdate, storeState]);
 
+  const handleAnalyseSam = useCallback(async () => {
+    const imageCanvas = imageCanvasRef.current;
+    if (!imageCanvas) return;
+
+    const imageBase64 = imageCanvas.toDataURL("image/png");
+    setIsSamLoading(true);
+    storeState();
+
+    try {
+      const result = await predictSam(imageBase64);
+      if (result && result.status === "success") {
+        applyPredictionToMask(result);
+      }
+    } catch (error) {
+      console.error("SAM analysis failed:", error);
+    } finally {
+      setIsSamLoading(false);
+    }
+  }, [imageCanvasRef, storeState, applyPredictionToMask]);
+
   // Load image and match sizes for all canvases
   const loadImage = useCallback(
     (src: string) => {
@@ -1101,10 +1123,16 @@ export default function Canvas({
         onLoadMask={handleLoadMask}
         onLoadImage={handleLoadImage}
         onClearMask={handleClearMask}
+        onAnalyseSam={handleAnalyseSam}
       />
       {showMaskSavedToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded bg-green-600 px-3 py-2 text-sm text-white shadow">
           Mask saved to the server
+        </div>
+      )}
+      {isSamLoading && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded bg-blue-600 px-3 py-2 text-sm text-white shadow">
+          Analysing image with SAM...
         </div>
       )}
       <input
