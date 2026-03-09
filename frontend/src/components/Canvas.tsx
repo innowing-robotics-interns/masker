@@ -545,27 +545,27 @@ export default function Canvas({
 
         if (!imageCanvasRef) return null;
 
-        // For debugging purposes, draws a square
-        const ctx = imageCanvasRef.current?.getContext("2d");
-        if (ctx) {
-          ctx.fillStyle = `rgba(128, 0, 128, ${0.5})`;
-          ctx.fillRect(
-            centerX - cropSize / 2,
-            centerY - cropSize / 2,
-            cropSize,
-            cropSize,
-          );
+        // // For debugging purposes, draws a square
+        // const ctx = imageCanvasRef.current?.getContext("2d");
+        // if (ctx) {
+        //   ctx.fillStyle = `rgba(128, 0, 128, ${0.5})`;
+        //   ctx.fillRect(
+        //     centerX - cropSize / 2,
+        //     centerY - cropSize / 2,
+        //     cropSize,
+        //     cropSize,
+        //   );
 
-          // Red stroke border
-          ctx.strokeStyle = "purple";
-          ctx.lineWidth = 4;
-          ctx.strokeRect(
-            centerX - cropSize / 2,
-            centerY - cropSize / 2,
-            cropSize,
-            cropSize,
-          );
-        }
+        //   // Red stroke border
+        //   ctx.strokeStyle = "purple";
+        //   ctx.lineWidth = 4;
+        //   ctx.strokeRect(
+        //     centerX - cropSize / 2,
+        //     centerY - cropSize / 2,
+        //     cropSize,
+        //     cropSize,
+        //   );
+        // }
 
         const crop = {
           id: cropsRef.current.length,
