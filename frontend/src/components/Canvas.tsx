@@ -54,6 +54,8 @@ export default function Canvas({
     maskCanvasRef,
     imageCanvasRef,
     storeState,
+    undo,
+    redo,
     currentImageUrl,
     canvasVersion,
     zoomLevel,
@@ -126,6 +128,26 @@ export default function Canvas({
       setBrushMode("draw");
     }
   }, [activeTool]);
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+      else if (
+        ((e.ctrlKey || e.metaKey) && e.key === "y") ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "z")
+      ) {
+        e.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [undo, redo]);
 
   const getMouseXY = useCallback(
     (e: MouseEvent): [number, number] => {
@@ -1172,7 +1194,7 @@ export default function Canvas({
           <SliderDemo
             label="Brush Size"
             min={1}
-            max={10}
+            max={50}
             step={1}
             value={brushSize}
             showValue={true}
