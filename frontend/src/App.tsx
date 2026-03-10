@@ -30,7 +30,7 @@ function App() {
             scrollContainerRef={scrollContainerRef}
           />
         </div>
-        <div className="fixed ">{showFileManager && <FileManager />}</div>
+        <div className="fixed ">{showFileManager && <FileManager onClose={() => setShowFileManager(false)} />}</div>
       </CanvasProvider>
     </div>
   );

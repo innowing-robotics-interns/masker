@@ -13,6 +13,10 @@ export default function FileManager({
   const handleImageClick = (url: string) => {
     setCurrentImageUrl(url);
     console.log("Image clicked:", url);
+    // Close the file manager after selecting an image
+    if (onClose) {
+      onClose();
+    }
   };
 
   useEffect(() => {
