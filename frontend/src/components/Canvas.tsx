@@ -36,8 +36,8 @@ export default function Canvas({
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [maskPreviewRgb, setMaskPreviewRgb] = useState({
     r: 255,
-    g: 255,
-    b: 255,
+    g: 0,
+    b: 0,
   });
   const [showMaskSavedToast, setShowMaskSavedToast] = useState(false);
   const [isSamLoading, setIsSamLoading] = useState(false);
@@ -1194,7 +1194,7 @@ export default function Canvas({
           <SliderDemo
             label="Brush Size"
             min={1}
-            max={50}
+            max={200}
             step={1}
             value={brushSize}
             showValue={true}
@@ -1204,7 +1204,7 @@ export default function Canvas({
       )}
 
       {/* Cursor Size That will change based on the zoomLevel and BrushSize*/}
-      {
+      {activeTool !== "magic" && (
         <div
           className="fixed pointer-events-none z-50 rounded-full bg-gray-200 border-2 border-white"
           style={{
@@ -1215,7 +1215,7 @@ export default function Canvas({
             height: cursorDiameterClamped,
           }}
         />
-      }
+      )}
 
       <div className="relative w-fit h-fit border border-gray-300 shadow-md">
         <canvas ref={imageCanvasRef} className="block" />
