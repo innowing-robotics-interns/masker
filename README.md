@@ -12,7 +12,15 @@ This is the repo for the web tool for labeling datasets with binary masks
 
 2. Put the .pth model in the root directory of this repo. The link to the pretrained .pth model can be found on: https://drive.google.com/file/d/1vIFsQH1KoPzgORHK_1z78zkXNT9twslL/view
 
-3. Run the following commands
+3. Create a `.env` file in the repo root with your Hugging Face token so SAM3 can download its weights. 
+
+```bash
+HF_TOKEN=your_hf_token_here
+```
+
+Note that you can get a Hugging Face token by requesting access to checkpoints on the SAM 3 Hugging Face [repo](https://huggingface.co/facebook/sam3) and going to your settings. 
+
+4. Run the following commands
 
 ```bash
 # clone the repository
