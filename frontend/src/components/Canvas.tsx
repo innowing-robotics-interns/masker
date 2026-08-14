@@ -5,14 +5,17 @@ import type { Tool, Crop } from "../types";
 import Toolbar from "./Toolbar";
 import { predictCrops } from "../api/magicPen";
 import { predictSam } from "../api/samPredict";
+import { measureCrack, type MeasureData } from "../api/measure";
 import ColorPickerPopover from "./ColorPickerPopover";
+import MeasurementPanel from "./MeasurementPanel";
 import {
   saveMaskForImage,
   uploadMask,
   getDatasetNameFromImageUrl,
+  getLabelNameFromImageUrl,
   fetchMaskForImage,
 } from "../utils/masks";
-import { uploadImageToBackend } from "../utils/fileUpload";
+import { importFolderToBackend } from "../utils/fileUpload";
 import SliderDemo from "./Slider";
 
 export default function Canvas({
@@ -41,6 +44,17 @@ export default function Canvas({
   });
   const [showMaskSavedToast, setShowMaskSavedToast] = useState(false);
   const [isSamLoading, setIsSamLoading] = useState(false);
+  const [samPrompt, setSamPrompt] = useState("cracks");
+  const [samThreshold, setSamThreshold] = useState(0.3);
+  const [samDetections, setSamDetections] = useState<number | null>(null);
+  const [isMeasuring, setIsMeasuring] = useState(false);
+  const [measureOverlayUrl, setMeasureOverlayUrl] = useState<string | null>(
+    null,
+  );
+  const [measureData, setMeasureData] = useState<MeasureData | null>(null);
+  const [measureError, setMeasureError] = useState<string | null>(null);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
   const saveToastTimeoutRef = useRef<number | null>(null);
   const [colorPickerAnchor, setColorPickerAnchor] = useState<{
     x: number;
@@ -917,46 +931,53 @@ export default function Canvas({
     imageFileInputRef.current?.click();
   }, []);
 
-  const handleImageFileChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const files = event.target.files;
-      if (!files || files.length === 0) return;
+  const handleFolderChange = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? []);
+      event.target.value = "";
+      if (files.length === 0) return;
 
-      // Currently just uses test1 dataset for uploads, but ideally should parse from URL or have user select
-      const datasetName =
-        getDatasetNameFromImageUrl(currentImageUrl) || "test1";
-      console.log("Uploading to dataset:", datasetName);
+      // The dataset name is the top-level folder the user picked.
+      const firstRel =
+        (files[0] as unknown as { webkitRelativePath?: string })
+          .webkitRelativePath ?? files[0].name;
+      const datasetName = firstRel.split("/")[0] || "dataset";
 
-      Array.from(files).forEach(async (file) => {
-        if (!file.type.startsWith("image/")) {
-          console.warn("Selected file is not an image:", file.name);
+      setIsImporting(true);
+      setImportStatus(null);
+      try {
+        const result = await importFolderToBackend({ datasetName, files });
+        if (!result.ok) {
+          setImportStatus(`Import failed: ${result.error}`);
           return;
         }
+        setImportStatus(
+          `Imported ${result.data.saved} file(s) into "${datasetName}" ` +
+            `(${result.data.subfolders.join(", ")}). Open it from the folder menu.`,
+        );
 
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-          const imageDataUrl = String(e.target?.result ?? "");
-          if (!imageDataUrl) return;
-
-          const result = await uploadImageToBackend({
-            datasetName,
-            imageName: file.name,
-            imageDataUrl,
-          });
-
-          if (result.ok) {
-            console.log("Image uploaded successfully:", file.name);
-            setCurrentImageUrl(`/datasets/test1/images/${file.name}`);
-          } else {
-            console.error("Failed to upload image:", result.error);
-          }
-        };
-        reader.readAsDataURL(file);
-      });
-
-      event.target.value = "";
+        // Load the first RGB image of the new capture so it's ready to label.
+        const firstImage = files
+          .map(
+            (f) =>
+              (f as unknown as { webkitRelativePath?: string })
+                .webkitRelativePath ?? f.name,
+          )
+          .filter((p) => /\/(RGB|images)\/[^/]+\.(jpg|jpeg|png)$/i.test(p))
+          .sort()[0];
+        if (firstImage) {
+          const name = firstImage.split("/").pop();
+          setCurrentImageUrl(`/datasets/${datasetName}/images/${name}`);
+        }
+      } catch (error) {
+        setImportStatus(
+          error instanceof Error ? error.message : "Import failed.",
+        );
+      } finally {
+        setIsImporting(false);
+      }
     },
-    [currentImageUrl, setCurrentImageUrl],
+    [setCurrentImageUrl],
   );
 
   const handleClearMask = useCallback(() => {
@@ -991,19 +1012,86 @@ export default function Canvas({
 
     const imageBase64 = imageCanvas.toDataURL("image/png");
     setIsSamLoading(true);
+    setSamDetections(null);
     storeState();
 
     try {
-      const result = await predictSam(imageBase64);
+      const result = await predictSam(imageBase64, {
+        textPrompt: samPrompt,
+        confidenceThreshold: samThreshold,
+      });
       if (result && result.status === "success") {
         applyPredictionToMask(result);
+        setSamDetections(
+          typeof result.num_detections === "number"
+            ? result.num_detections
+            : null,
+        );
       }
     } catch (error) {
       console.error("SAM analysis failed:", error);
     } finally {
       setIsSamLoading(false);
     }
-  }, [imageCanvasRef, storeState, applyPredictionToMask]);
+  }, [imageCanvasRef, storeState, applyPredictionToMask, samPrompt, samThreshold]);
+
+  const handleMeasure = useCallback(async () => {
+    const maskCanvas = maskCanvasRef.current;
+    if (!maskCanvas || !currentImageUrl) return;
+
+    const datasetName = getDatasetNameFromImageUrl(currentImageUrl);
+    const labelName = getLabelNameFromImageUrl(currentImageUrl);
+    if (!datasetName || !labelName) {
+      setMeasureError(
+        "Could not determine dataset / label name from the image URL.",
+      );
+      return;
+    }
+
+    setIsMeasuring(true);
+    setMeasureError(null);
+    try {
+      // Save the current mask first so the on-disk label the pipeline reads
+      // matches what's on the canvas. saveMaskForImage always POSTs the current
+      // canvas (there's no separate dirty flag), so this doubles as the
+      // "save if unsaved changes" step.
+      const saveResult = await saveMaskForImage(
+        currentImageUrl,
+        maskCanvas.toDataURL("image/png"),
+      );
+      if (!saveResult.ok) {
+        setMeasureError(`Could not save mask before measuring: ${saveResult.error}`);
+        return;
+      }
+
+      const result = await measureCrack(datasetName, labelName);
+      if (result.ok) {
+        setMeasureOverlayUrl(result.data.overlay_base64);
+        setMeasureData(result.data);
+      } else if (result.reason === "no_depth") {
+        setMeasureError(
+          "No depth data available for this image. Add a ScanRGBD frame " +
+            `JSON at datasets/${datasetName}/depth/ to measure.`,
+        );
+      } else {
+        setMeasureError(result.message);
+      }
+    } catch (error) {
+      console.error("Measurement failed:", error);
+      setMeasureError(
+        error instanceof Error ? error.message : "Measurement failed.",
+      );
+    } finally {
+      setIsMeasuring(false);
+    }
+  }, [currentImageUrl, maskCanvasRef]);
+
+  const dismissMeasurement = useCallback(() => {
+    setMeasureOverlayUrl(null);
+    setMeasureData(null);
+    setMeasureError(null);
+    setActiveTool("brush");
+  }, [setActiveTool]);
 
   // Load image and match sizes for all canvases
   const loadImage = useCallback(
@@ -1077,6 +1165,11 @@ export default function Canvas({
   );
 
   const loadImageFromBackend = useCallback(async () => {
+    // Clear any measurement overlay/panel from the previously loaded image.
+    setMeasureOverlayUrl(null);
+    setMeasureData(null);
+    setMeasureError(null);
+
     const imageSrc = await fetchImageFromBackend(currentImageUrl);
     if (imageSrc) {
       loadImage(imageSrc);
@@ -1145,7 +1238,7 @@ export default function Canvas({
         onLoadMask={handleLoadMask}
         onLoadImage={handleLoadImage}
         onClearMask={handleClearMask}
-        onAnalyseSam={handleAnalyseSam}
+        onMeasure={handleMeasure}
       />
       {showMaskSavedToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded bg-green-600 px-3 py-2 text-sm text-white shadow">
@@ -1156,6 +1249,52 @@ export default function Canvas({
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded bg-blue-600 px-3 py-2 text-sm text-white shadow">
           Analysing image with SAM...
         </div>
+      )}
+      {isMeasuring && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded bg-indigo-600 px-3 py-2 text-sm text-white shadow">
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+          Measuring crack width (plane fitting)…
+        </div>
+      )}
+      {isImporting && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded bg-slate-700 px-3 py-2 text-sm text-white shadow">
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+          Importing folder…
+        </div>
+      )}
+      {importStatus && !isImporting && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded bg-emerald-600 px-3 py-2 text-sm text-white shadow">
+          <span>{importStatus}</span>
+          <button
+            type="button"
+            onClick={() => setImportStatus(null)}
+            className="font-bold leading-none"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      {measureError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded bg-red-600 px-3 py-2 text-sm text-white shadow">
+          <span>{measureError}</span>
+          <button
+            type="button"
+            onClick={() => setMeasureError(null)}
+            className="font-bold leading-none"
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      {measureData && (
+        <MeasurementPanel
+          maxWidthMm={measureData.max_width_mm}
+          numSamples={measureData.num_samples}
+          numExcluded={measureData.num_excluded}
+          onClose={dismissMeasurement}
+        />
       )}
       <input
         ref={maskFileInputRef}
@@ -1169,10 +1308,12 @@ export default function Canvas({
       <input
         ref={imageFileInputRef}
         type="file"
-        accept="image/*"
-        multiple
         className="hidden"
-        onChange={handleImageFileChange}
+        onChange={handleFolderChange}
+        {...({ webkitdirectory: "", directory: "", mozdirectory: "" } as Record<
+          string,
+          string
+        >)}
       />
 
       <ColorPickerPopover
@@ -1200,6 +1341,50 @@ export default function Canvas({
             showValue={true}
             onChange={setBrushSize}
           />
+        </div>
+      )}
+
+      {activeTool === "sam" && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-gray-100 rounded-md shadow-xl px-6 py-4 w-[380px] flex flex-col gap-3">
+          <div className="text-sm font-semibold text-neutral-800">
+            SAM (text prompt segmentation)
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <span className="w-24">Prompt</span>
+            <input
+              type="text"
+              value={samPrompt}
+              onChange={(e) => setSamPrompt(e.target.value)}
+              placeholder="e.g. cracks"
+              className="flex-1 border border-neutral-300 rounded px-2 py-1 text-sm"
+            />
+          </label>
+          <SliderDemo
+            label="Confidence"
+            min={0.05}
+            max={0.9}
+            step={0.05}
+            value={samThreshold}
+            showValue={true}
+            onChange={setSamThreshold}
+          />
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-neutral-500">
+              {samDetections == null
+                ? "Lower confidence finds more (may add noise)."
+                : samDetections === 0
+                  ? "Found 0 regions — lower the confidence or try another prompt."
+                  : `Found ${samDetections} region${samDetections === 1 ? "" : "s"}.`}
+            </span>
+            <button
+              type="button"
+              onClick={handleAnalyseSam}
+              disabled={isSamLoading}
+              className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white shadow disabled:opacity-50"
+            >
+              {isSamLoading ? "Analysing…" : "Analyse"}
+            </button>
+          </div>
         </div>
       )}
 
@@ -1234,6 +1419,18 @@ export default function Canvas({
           ref={magicPenCanvasRef}
           className="absolute top-0 left-0 block cursor-crosshair opacity-50 pointer-events-none"
         />
+        {/* Measurement overlay: the annotated result image, shown over the mask */}
+        {measureOverlayUrl && imageCanvasRef.current && (
+          <img
+            src={measureOverlayUrl}
+            alt="Crack width measurement overlay"
+            className="absolute top-0 left-0 block pointer-events-none"
+            style={{
+              width: imageCanvasRef.current.width * zoomLevel,
+              height: imageCanvasRef.current.height * zoomLevel,
+            }}
+          />
+        )}
       </div>
     </main>
   );

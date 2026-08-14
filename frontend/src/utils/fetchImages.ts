@@ -12,15 +12,26 @@ export const fetchImageFromBackend = async (dir: string) => {
   }
 };
 
-export const getImageList = async () => {
+export const getDatasetList = async (): Promise<string[]> => {
   try {
-    const response = await fetch("/datasets/test1/images");
+    const response = await fetch("/datasets/list");
+    if (!response.ok) throw new Error("Dataset list not found");
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching dataset list:", error);
+    return [];
+  }
+};
+
+export const getImageList = async (dataset: string = "test1") => {
+  try {
+    const response = await fetch(`/datasets/${dataset}/images`);
     if (!response.ok) throw new Error("Image list not found");
 
     const files = await response.json();
     return files.map((file: string) => ({
       name: file,
-      dir: `/datasets/test1/images/${file}`,
+      dir: `/datasets/${dataset}/images/${file}`,
     }));
   } catch (error) {
     console.error("Error fetching image list:", error);

@@ -13,6 +13,7 @@ import {
   Save,
   Trash2,
   ScanSearch,
+  Ruler,
 } from "lucide-react";
 import { useContext } from "react";
 import { CanvasContext } from "../contexts/Contexts";
@@ -33,7 +34,7 @@ export default function Toolbar({
   onLoadMask,
   onLoadImage,
   onClearMask,
-  onAnalyseSam,
+  onMeasure,
 }: {
   toggleFiles: () => void;
   switchMode: () => void;
@@ -48,7 +49,7 @@ export default function Toolbar({
   onLoadMask?: () => void;
   onLoadImage?: () => void;
   onClearMask?: () => void;
-  onAnalyseSam?: () => void;
+  onMeasure?: () => void;
 }) {
   const { undo, redo } = useContext(CanvasContext);
 
@@ -103,12 +104,22 @@ export default function Toolbar({
           <ToolButton
             name="Analyse Image using SAM"
             icon={ScanSearch}
-            onClick={onAnalyseSam}
+            onClick={() => setActiveTool("sam")}
+            isActive={activeTool === "sam"}
+          />
+          <ToolButton
+            name="Measure Crack Width"
+            icon={Ruler}
+            onClick={() => {
+              setActiveTool("measure");
+              onMeasure?.();
+            }}
+            isActive={activeTool === "measure"}
           />
           <ToolButton name="Save Mask" icon={Save} onClick={onSaveMask} />
           <ToolButton name="Load Mask" icon={FileDown} onClick={onLoadMask} />
           <ToolButton
-            name="Upload Image"
+            name="Upload ScanRGBD Folder"
             icon={UploadIcon}
             onClick={onLoadImage}
           />

@@ -1,5 +1,5 @@
-from os import listdir
-from os.path import join, isfile, splitext, basename
+from os import listdir, makedirs
+from os.path import join, isfile, isdir, splitext, basename
 import base64
 import re
 import argparse
@@ -8,6 +8,8 @@ from typing import Union
 from flask import Flask, render_template, jsonify, request, redirect, url_for
 from predictor import Predictor
 from magic_pen_router import magic_pen_router
+from measure_router import measure_router
+from dataset_paths import resolve_dir, resolve_file, list_datasets
 
 predictor = Predictor(model_settings_path='model_settings.yaml')
 
@@ -103,6 +105,9 @@ app = Flask(__name__,
 
 # Register blueprints
 app.register_blueprint(magic_pen_router, url_prefix='/magic_pen')
+# No url_prefix: measure_router defines fully-qualified paths so its metadata
+# routes sit under /datasets/<dataset>/meta/... alongside images/ and labels/.
+app.register_blueprint(measure_router)
 
 
 @app.route("/")
@@ -129,7 +134,10 @@ def img_mask() -> str:
 @app.route("/datasets/<dataset>/<img_or_label>/<filename>", methods=["GET"])
 def get_file(dataset: str, img_or_label: str, filename: str) -> str:
 
-    path = join('datasets', dataset, img_or_label, filename)
+    # Resolve through folder aliases (e.g. images -> RGB for ScanRGBD captures),
+    # falling back to the literal path for backward compatibility.
+    path = (resolve_file(dataset, img_or_label, filename)
+            or join('datasets', dataset, img_or_label, filename))
     if not isfile(path):
         return jsonify({"status": "error", "message": "File not found."}), 404
 
@@ -138,7 +146,8 @@ def get_file(dataset: str, img_or_label: str, filename: str) -> str:
 # Temporary endpoint for giving images to the react frontend
 @app.route("/datasets/<dataset>/<img_or_label>/<filename>/new", methods=["GET"])
 def get_file_new(dataset: str, img_or_label: str, filename: str):
-    path = join('datasets', dataset, img_or_label, filename)
+    path = (resolve_file(dataset, img_or_label, filename)
+            or join('datasets', dataset, img_or_label, filename))
     if not isfile(path):
         return jsonify({"status": "error", "message": "File not found."}), 404
 
@@ -153,10 +162,79 @@ def get_file_new(dataset: str, img_or_label: str, filename: str):
         from flask import Response
         return Response(img_file.read(), mimetype=mime_type)
 
+@app.route('/datasets/list', methods=['GET'])
+def get_dataset_list() -> str:
+    """JSON list of dataset directory names, for the frontend dataset picker."""
+    return jsonify(list_datasets())
+
+@app.route('/datasets/<dataset>/import', methods=['POST'])
+def import_folder(dataset: str):
+    """Import a whole ScanRGBD capture folder as a new dataset.
+
+    Accepts a multipart POST with field ``files`` (many files), each carrying a
+    relative path in its filename (e.g. ``RGB/rgb_0.jpg`` or
+    ``scan5/Frame/frame_0.json``). Files are written under datasets/<dataset>/,
+    preserving only their immediate subfolder (RGB/Frame/Confidence/…). Anything
+    outside the allowed subfolders/extensions, or containing '..', is skipped.
+    """
+    items = list(request.files.items(multi=True))
+    if not items:
+        return jsonify({"status": "error",
+                        "message": "No files provided."}), 400
+
+    allowed_subfolders = {
+        'RGB', 'Frame', 'Confidence', 'images', 'labels', 'depth', 'confidence',
+    }
+    allowed_exts = {'.jpg', '.jpeg', '.png', '.json'}
+
+    saved, skipped = 0, 0
+    subfolders_seen = set()
+    for field_name, f in items:
+        # The relative path is carried in the form field name (browsers don't
+        # sanitize field names the way they can strip directories from a
+        # multipart filename); fall back to the filename if needed.
+        rel = field_name if ('/' in field_name or '\\' in field_name) \
+            else (f.filename or field_name)
+        rel = rel.replace('\\', '/')
+        parts = [p for p in rel.split('/') if p and p != '.']
+        if any(p == '..' for p in parts) or len(parts) < 2:
+            skipped += 1
+            continue
+        subfolder, name = parts[-2], parts[-1]
+        if subfolder not in allowed_subfolders:
+            skipped += 1
+            continue
+        if splitext(name)[1].lower() not in allowed_exts:
+            skipped += 1
+            continue
+        dest_dir = join('datasets', dataset, subfolder)
+        makedirs(dest_dir, exist_ok=True)
+        f.save(join(dest_dir, name))
+        subfolders_seen.add(subfolder)
+        saved += 1
+
+    if saved == 0:
+        return jsonify({
+            "status": "error",
+            "message": "No valid files found. Expected a ScanRGBD folder with "
+                       "RGB/ and Frame/ subfolders.",
+            "skipped": skipped,
+        }), 400
+
+    return jsonify({
+        "status": "success",
+        "message": f"Imported {saved} file(s) into dataset '{dataset}'.",
+        "dataset": dataset,
+        "saved": saved,
+        "skipped": skipped,
+        "subfolders": sorted(subfolders_seen),
+    }), 200
+
 @app.route('/datasets/<dataset>/images', methods=['GET'])
 def get_image_list_in_dataset(dataset: str) -> str:
-    path = join('datasets', dataset, 'images')
-    images = get_files(path)
+    # images/ for app-native datasets, RGB/ for ScanRGBD captures.
+    path = resolve_dir(dataset, 'images')
+    images = get_files(path) if path and isdir(path) else []
     return jsonify(images)
 
 @app.route('/datasets/<dataset>/labels', methods=['GET'])

@@ -512,8 +512,16 @@ def predict_sam():
                 "message": "No image data provided"
             }), 400
 
+        # Optional per-call tuning: text prompt and detection confidence threshold.
+        text_prompt = data.get('text_prompt') or None
+        confidence_threshold = data.get('confidence_threshold')
+
         image = decode_base64_image(image_base64)
-        prediction = sam_predictor(image)
+        prediction = sam_predictor(
+            image,
+            text_prompt=text_prompt,
+            confidence_threshold=confidence_threshold,
+        )
 
         if prediction.ndim > 2:
             prediction = prediction.squeeze()
@@ -521,9 +529,19 @@ def predict_sam():
         binary_mask = (prediction > 0.5).astype(np.uint8) * 255
         mask_base64 = encode_mask_to_base64(binary_mask)
 
+        info = sam_predictor.last_detection_info()
+
         return jsonify({
             "status": "success",
-            "merged_mask_base64": mask_base64
+            "merged_mask_base64": mask_base64,
+            "num_detections": info["num_detections"],
+            "scores": info["scores"],
+            "prompt_used": text_prompt or sam_predictor.text_prompt,
+            "threshold_used": (
+                float(confidence_threshold)
+                if confidence_threshold is not None
+                else sam_predictor.processor.confidence_threshold
+            ),
         })
 
     except Exception as e:

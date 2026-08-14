@@ -1,4 +1,11 @@
-export type Tool = "brush" | "erase" | "magic" | "files" | "colorPicker";
+export type Tool =
+  | "brush"
+  | "erase"
+  | "magic"
+  | "files"
+  | "colorPicker"
+  | "measure"
+  | "sam";
 
 export interface Crop {
   id: number;
